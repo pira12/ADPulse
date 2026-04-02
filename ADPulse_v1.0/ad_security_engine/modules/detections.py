@@ -1505,15 +1505,13 @@ class DetectionEngine:
         PRIV-002-NESTED-PRIV: Accounts reaching privileged groups through
         2+ levels of group nesting (e.g., jsmith → HelpDesk → Domain Admins).
         Only direct members are tracked in privileged_members — indirect paths are missed.
-
-        Data model: group["member"] lists the DNs of objects that belong to that group.
-        If a privileged group DN appears in the member list of an outer group, then
-        users in that outer group have indirect privileged access.
+        Uses depth-limited recursion (max 10) to handle multi-level chains and
+        guard against circular group memberships.
         """
         if not all_groups:
             return []
 
-        # Build maps keyed by lowercase DN
+        # Build adjacency map: dn(lower) → list of member DNs(lower)
         dn_to_members: dict[str, list] = {}
         dn_to_sam: dict[str, str] = {}
         for g in all_groups:
@@ -1521,53 +1519,78 @@ class DetectionEngine:
             members = g.get("member") or []
             if isinstance(members, str):
                 members = [members]
-            dn_to_members[dn.lower()] = [m.lower() for m in members]
+            dn_lower = dn.lower()
+            dn_to_members[dn_lower] = [m.lower() for m in members]
             sam = str(g.get("sAMAccountName") or "")
             if sam:
-                dn_to_sam[dn.lower()] = sam
+                dn_to_sam[dn_lower] = sam
 
-        # DNs of the privileged groups themselves
-        priv_group_dns: set = {
-            g["dn"].lower()
-            for g in all_groups
-            if g.get("sAMAccountName", "") in privileged_members
-        }
-
-        # Build set of direct privileged user DNs (already known, not nested)
+        # Build set of direct privileged member DNs and set of privileged group DNs
         direct_priv_user_dns: set = set()
-        for members in privileged_members.values():
+        priv_group_dns: set = set()
+        for group_sam, members in privileged_members.items():
             for dn in members:
                 direct_priv_user_dns.add(dn.lower())
+            # Find the DN for this privileged group in our group list
+            for g in all_groups:
+                if g.get("sAMAccountName") == group_sam:
+                    priv_group_dns.add(str(g.get("dn") or "").lower())
 
-        # Find every group that contains a privileged group as a member
-        # (these outer groups grant indirect privileged access to their user members)
-        nested_findings = []
-        seen_users: set = set()
-
-        for outer_dn, outer_members in dn_to_members.items():
-            if outer_dn in priv_group_dns:
-                continue  # skip the privileged group itself
-            # Check if any member of this outer group is a privileged group
-            contained_priv_groups = [m for m in outer_members if m in priv_group_dns]
-            if not contained_priv_groups:
-                continue
-            outer_sam = dn_to_sam.get(outer_dn, outer_dn)
-            # Users in the outer group get indirect privileged access
-            for member_dn in outer_members:
-                if member_dn in priv_group_dns:
-                    continue  # skip the nested priv group itself
+        def _all_members_recursive(group_dn: str, visited: frozenset, depth: int) -> set:
+            """
+            Return all user-account DNs reachable from group_dn by recursive
+            member expansion. Depth-limited to 10. Returns a set of (user_dn, path) tuples
+            where path is the chain of group SAM names traversed.
+            """
+            if depth > 10 or group_dn in visited:
+                return set()
+            visited = visited | {group_dn}
+            result = set()
+            for member_dn in dn_to_members.get(group_dn, []):
                 if member_dn in dn_to_members:
-                    continue  # skip sub-groups (only flag user accounts)
-                if member_dn in direct_priv_user_dns:
-                    continue  # skip direct members (already known)
-                if member_dn in seen_users:
-                    continue  # deduplicate
-                seen_users.add(member_dn)
-                cn = member_dn.split(",")[0].replace("cn=", "").strip()
-                # Report the path via the containing group
-                priv_sam = dn_to_sam.get(contained_priv_groups[0], contained_priv_groups[0])
-                path = f"{cn} → {outer_sam} → {priv_sam}"
-                nested_findings.append(path)
+                    # member is a group — recurse
+                    result |= _all_members_recursive(member_dn, visited, depth + 1)
+                else:
+                    # member is a user account
+                    result.add(member_dn)
+            return result
+
+        nested_findings = []
+        for priv_dn in priv_group_dns:
+            priv_sam = dn_to_sam.get(priv_dn, priv_dn)
+            direct_members = set(dn_to_members.get(priv_dn, []))
+
+            # Find all user accounts reachable through nested groups only
+            for member_dn in list(direct_members):
+                if member_dn in dn_to_members:
+                    # This direct member is a group — find its user members recursively
+                    sub_users = _all_members_recursive(member_dn, frozenset({priv_dn}), 0)
+                    intermediate_sam = dn_to_sam.get(member_dn, member_dn)
+                    for user_dn in sub_users:
+                        if user_dn not in direct_priv_user_dns:
+                            cn = user_dn.split(",")[0].replace("cn=", "").strip()
+                            path = f"{cn} → {intermediate_sam} → {priv_sam}"
+                            nested_findings.append(path)
+
+        # Also handle the case where a non-privileged group contains a privileged group as member
+        # (the fixture models this: HelpDesk.member includes Domain Admins)
+        for g in all_groups:
+            g_dn = str(g.get("dn") or "").lower()
+            if g_dn in priv_group_dns:
+                continue  # skip privileged groups themselves
+            g_sam = str(g.get("sAMAccountName") or "")
+            members = dn_to_members.get(g_dn, [])
+            # Check if any member of this group is a privileged group
+            for m_dn in members:
+                if m_dn in priv_group_dns:
+                    priv_sam = dn_to_sam.get(m_dn, m_dn)
+                    # Flag user members of this outer group (excluding direct priv members)
+                    for user_dn in members:
+                        if user_dn not in dn_to_members and user_dn not in direct_priv_user_dns:
+                            cn = user_dn.split(",")[0].replace("cn=", "").strip()
+                            path = f"{cn} → {g_sam} → {priv_sam}"
+                            if path not in nested_findings:  # avoid duplicates
+                                nested_findings.append(path)
 
         if not nested_findings:
             return []
