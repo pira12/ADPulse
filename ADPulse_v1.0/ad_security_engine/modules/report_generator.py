@@ -143,9 +143,10 @@ class HTMLReportGenerator:
             policy_status = f.get("policy_status", "")
             if policy_status == "in_remediation":
                 policy_reason = f.get("policy_reason", "")
+                _reason_attr = policy_reason.replace('"', '&quot;')
                 policy_badge = (
                     f'<span class="policy-badge remediation-badge" '
-                    f'title="In remediation: {policy_reason}">&#128295; IN REMEDIATION</span>'
+                    f'title="In remediation: {_reason_attr}">&#128295; IN REMEDIATION</span>'
                 )
             first_seen = (f.get("first_seen") or "")[:10] or "This scan"
             new_val    = "new" if is_new else "recurring"
