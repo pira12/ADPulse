@@ -138,6 +138,7 @@ python main.py
 python main.py --report-only    # Regenerate reports from last scan
 python main.py --history        # View scan history
 python main.py --daemon         # Run continuously (every 6 hours)
+python main.py --diff           # Show what changed between the last two scans
 ```
 
 ---
@@ -162,6 +163,47 @@ Each scan generates six output files:
 - **New/Recurring filter** to focus on new findings since last scan
 - **Collapsible cards** - click finding headers to expand/collapse details
 - **Click "show more"** on affected objects to reveal the full list
+- **Dark mode toggle** - switch between light and dark themes
+- **Copy summary to clipboard** - one-click copy of the executive summary
+- **Permalink anchors** - direct link to any individual finding for easy sharing
+
+---
+
+## Notifications
+
+ADPulse supports multiple notification channels to integrate with your existing workflows.
+
+### Webhook (Slack, Teams, etc.)
+
+```ini
+[notifications]
+webhook_url = https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXX
+webhook_format = slack   # slack | teams | generic
+```
+
+### Syslog
+
+```ini
+[notifications]
+syslog_host = siem.company.local
+syslog_port = 514
+syslog_protocol = udp   # udp | tcp
+```
+
+### Email (SMTP with PDF attachment)
+
+```ini
+[notifications]
+email_enabled = true
+smtp_server = smtp.company.local
+smtp_port = 587
+smtp_use_tls = true
+smtp_username = adpulse@company.local
+smtp_password = YourSMTPPassword
+email_to = security-team@company.local
+email_subject = ADPulse Scan Report - {domain} - {date}
+email_attach_pdf = true
+```
 
 ---
 
@@ -206,11 +248,11 @@ python main.py --daemon
 ```
 main.py                     Entry point & orchestrator (6-step scan lifecycle)
 modules/
-  ldap_collector.py         ~20 read-only LDAP queries against AD
-  baseline_engine.py        SQLite database for snapshots & drift detection
-  detections.py             18+ security detection methods
-  report_generator.py       Interactive HTML & branded PDF report generation
-  notifier.py               Console, text, JSON, and Event Log output
+  ldap_collector.py         ~20 read-only LDAP queries against AD (multi-domain aware)
+  baseline_engine.py        SQLite database for snapshots, drift detection & retention cleanup
+  detections.py             26+ security detection methods
+  report_generator.py       Interactive HTML, branded PDF, CSV & trend dashboard generation
+  notifier.py               Console, text, JSON, Event Log, webhook, syslog & email output
 install/
   create_service_account.ps1    Windows service account setup
   install_scheduled_task.ps1    Windows scheduled task deployment

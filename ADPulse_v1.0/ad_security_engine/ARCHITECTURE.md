@@ -64,7 +64,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Uses `ldap3` library — pure Python, no OS dependencies
 
 ### Step 2: Collect AD Data
-- ~20 specialized LDAP queries run against the domain controller
+- ~26 specialized LDAP queries run against the domain controller
 - All queries use standard LDAP read operations (no writes)
 - Data collected includes: users, computers, groups, delegation, password policies, SPNs, UAC flags, SID History, LAPS status, and more
 - Results are returned as lists of dictionaries
@@ -76,7 +76,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Tables: `snapshots`, `user_objects`, `group_members`, `computer_objects`, `findings_history`
 
 ### Step 4: Run Security Detections
-- `DetectionEngine` runs 18+ detection methods against the collected data
+- `DetectionEngine` runs 26+ detection methods against the collected data
 - **Point-in-time detections**: Analyze current state (Kerberoasting, weak policies, etc.)
 - **Delta detections**: Compare against previous scan (new admin group members, new accounts)
 - Each finding is a standardized dict with: `finding_id`, `severity`, `title`, `description`, `affected`, `remediation`
@@ -93,6 +93,10 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Plain-text `.txt` summary file (paste into Teams/email/tickets)
 - JSON export file (machine-readable, for SIEM/automation)
 - Optional Windows Event Log entry (for Splunk/Sentinel ingestion)
+- CSV export for spreadsheet analysis
+- Webhook notifications (HTTP POST to Slack/Teams/custom endpoints)
+- Syslog forwarding (UDP RFC 5424)
+- Email delivery via SMTP with PDF attachment
 
 ---
 
@@ -136,6 +140,12 @@ All methods are **read-only**. No LDAP write operations exist in the codebase.
 | `get_protected_users_members()` | Members of Protected Users group | `sAMAccountName=Protected Users` |
 | `get_users_with_description_passwords()` | Description fields containing password keywords | `description=*pass*` |
 | `get_computers_without_laps()` | Machines without LAPS deployed | Missing `ms-Mcs-AdmPwdExpirationTime` |
+| `get_krbtgt_account()` | KRBTGT password age | `sAMAccountName=krbtgt` |
+| `get_trust_relationships()` | Domain trust enumeration | `objectClass=trustedDomain` |
+| `get_tombstone_lifetime()` | Forest tombstone lifetime | `CN=Directory Service,CN=Windows NT` |
+| `get_dns_zones()` | AD DNS zones | `objectClass=dnsZone` |
+| `get_des_only_accounts()` | DES-only encryption users | UAC `0x200000` |
+| `get_expiring_accounts()` | Accounts expiring soon | `accountExpires` attribute |
 
 ### `modules/baseline_engine.py` — SQLite Baseline & Delta Detection
 
@@ -161,10 +171,13 @@ findings_history  — All findings ever raised (with first_seen/is_new tracking)
 | `save_findings()` | Persist findings with first_seen/is_new tracking |
 | `get_findings_for_run()` | Retrieve findings for a specific scan |
 | `get_finding_trend()` | Get historical occurrences of a specific finding |
+| `get_finding_diff()` | Compare findings between scans |
+| `get_trend_data()` | Historical trend data for dashboard |
+| `cleanup_old_scans()` | Database retention cleanup |
 
 ### `modules/detections.py` — Security Finding Detectors
 
-See [DETECTIONS.md](DETECTIONS.md) for a complete catalog of all 18+ detections.
+See [DETECTIONS.md](DETECTIONS.md) for a complete catalog of all 26+ detections.
 
 ### `modules/report_generator.py` — HTML & PDF Reports
 
@@ -181,6 +194,10 @@ See [DETECTIONS.md](DETECTIONS.md) for a complete catalog of all 18+ detections.
 | Summary File | `.txt` | Share via email/Teams/tickets |
 | JSON Export | `.json` | SIEM ingestion / automation |
 | Windows Event Log | Event ID 1001 | SIEM tools monitoring event logs |
+| CSV Export | `.csv` | Spreadsheet-friendly findings export |
+| Webhook | HTTP POST | Push notifications to Slack/Teams/custom endpoints |
+| Syslog | UDP RFC 5424 | Forward findings to centralized syslog collectors |
+| Email | SMTP with PDF attachment | Automated email delivery of scan reports |
 
 ---
 
@@ -286,6 +303,7 @@ Each scan generates the following in the `output/` directory:
 | `ADPulse_Report_YYYYMMDD_HHMMSS.pdf` | PDF | Professional branded report for management |
 | `ADPulse_Summary_YYYYMMDD_HHMMSS.txt` | Text | Plain-text summary for sharing via email/Teams |
 | `ADPulse_Export_YYYYMMDD_HHMMSS.json` | JSON | Machine-readable export for SIEM/automation |
+| `ADPulse_Trends_YYYYMMDD_HHMMSS.html` | HTML | Trend dashboard with historical finding charts |
 
 ---
 

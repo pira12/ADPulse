@@ -306,6 +306,46 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
+#### CONF-003 — Short Tombstone Lifetime
+
+**What it detects:** The AD tombstone lifetime is set below the recommended 180 days.
+
+**Why it matters:** The tombstone lifetime determines how long deleted objects are retained before permanent removal. A short tombstone lifetime can cause lingering objects and replication failures if a domain controller is offline longer than the tombstone period. It also reduces the window for recovering accidentally deleted objects.
+
+**Severity Logic:**
+- `HIGH` — Tombstone lifetime below 60 days
+- `MEDIUM` — Tombstone lifetime between 60-179 days
+
+**Remediation:**
+1. Increase the tombstone lifetime to at least 180 days via `CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration`
+
+---
+
+#### TRUST-001 — Trust Relationships Without SID Filtering
+
+**What it detects:** Inter-domain or inter-forest trust relationships that do not have SID filtering (quarantine) enabled.
+
+**Why it matters:** Without SID filtering, a compromised trusted domain can inject arbitrary SIDs (including Domain Admins SIDs from the trusting domain) into Kerberos tickets via SID History. This allows full privilege escalation across the trust boundary. SID filtering should be enabled on all external and forest trusts.
+
+**Severity:** `HIGH`
+
+**Remediation:**
+1. Enable SID filtering on external trusts: `netdom trust /domain: /quarantine:yes`
+2. Verify SID filtering status on all trust relationships
+3. Only disable SID filtering when explicitly required for migration scenarios
+
+---
+
+#### TRUST-002 — Trust Relationship Inventory
+
+**What it detects:** Enumerates all trust relationships configured in the domain.
+
+**Why it matters:** Provides a complete inventory of trust relationships for security review. Trust relationships expand the authentication boundary and should be regularly audited to ensure only necessary trusts exist with appropriate security settings.
+
+**Severity:** `INFO` (informational — review for completeness and necessity)
+
+---
+
 ### Password Policy Detections
 
 #### POL-002 — Weak Minimum Password Length
@@ -327,6 +367,34 @@ Privileged accounts not in this group are missing these critical protections.
 **Why it matters:** Without lockout, attackers can perform unlimited password spray and brute-force attacks against every account in the domain without triggering any defensive mechanism.
 
 **Severity:** `CRITICAL`
+
+---
+
+#### POL-006 — FGPPs With No Targets
+
+**What it detects:** Fine-Grained Password Policies (FGPPs) that have no users or groups assigned to them via `msDS-PSOAppliesTo`.
+
+**Why it matters:** An FGPP without targets is effectively unused and provides no security benefit. This may indicate an incomplete deployment or a policy that lost its targets due to group deletion. Unused FGPPs add complexity and may give a false sense of security if administrators assume they are being enforced.
+
+**Severity:** `MEDIUM`
+
+**Remediation:**
+1. Assign appropriate user or group targets to the FGPP
+2. Remove the FGPP if it is no longer needed
+
+---
+
+#### POL-007 — Privileged Groups Not Covered by FGPP
+
+**What it detects:** Privileged groups (Domain Admins, Enterprise Admins, etc.) that are not targeted by any Fine-Grained Password Policy enforcing stronger password requirements than the default domain policy.
+
+**Why it matters:** Privileged accounts are high-value targets and should be held to stricter password requirements (longer minimum length, shorter maximum age). Without an FGPP targeting these groups, privileged accounts fall back to the default domain password policy, which is typically designed for standard users.
+
+**Severity:** `MEDIUM`
+
+**Remediation:**
+1. Create an FGPP with stricter settings (e.g., 20+ character minimum, 90-day max age)
+2. Apply the FGPP to all privileged groups
 
 ---
 
