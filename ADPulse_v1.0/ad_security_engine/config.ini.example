@@ -1,0 +1,76 @@
+[ldap]
+# Domain Controller hostname or IP
+server = dc01.company.local
+
+# Domain (used for LDAP base DN construction)
+domain = company.local
+
+# Service account credentials (standard domain user, NO admin rights needed)
+username = svc-secmonitor
+password = YourPasswordHere
+
+# LDAP port (389 = plaintext, 636 = LDAPS)
+port = 389
+
+# Use SSL (LDAPS) - recommended for production
+use_ssl = false
+
+# Connection timeout in seconds
+timeout = 30
+
+[scanning]
+# How often to run a full scan (in hours)
+scan_interval_hours = 6
+
+# Days of inactivity before an account is flagged as stale
+stale_account_days = 60
+
+# Days since password last set before flagging (0 = disable)
+password_age_days = 365
+
+# Privileged groups to monitor for membership changes (comma-separated)
+privileged_groups = Domain Admins,Enterprise Admins,Schema Admins,Administrators,Account Operators,Backup Operators,Group Policy Creator Owners
+
+[output]
+# Minimum severity to show in the console summary and summary .txt file
+# Findings at or above this level will be included
+# Options: LOW, MEDIUM, HIGH, CRITICAL
+min_summary_severity = MEDIUM
+
+# Write an entry to the Windows Application Event Log after each scan
+# Useful if you have a SIEM (Splunk, Microsoft Sentinel, etc.) reading event logs
+# Requires: pip install pywin32
+write_windows_eventlog = false
+
+[reporting]
+# Output directory for reports
+output_dir = ./output
+
+# Generate PDF report
+generate_pdf = true
+
+# Generate HTML report
+generate_html = true
+
+# Company name shown on reports
+company_name = Your Company
+
+# Logo path (optional, leave blank to skip)
+logo_path =
+
+[database]
+# SQLite database path for storing baselines
+db_path = ./ad_baseline.db
+
+[logging]
+# Log file path
+log_file = ./logs/ad_security_engine.log
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+log_level = INFO
+
+# Max log file size in MB before rotation
+max_log_size_mb = 10
+
+# Number of backup log files to keep
+log_backup_count = 5

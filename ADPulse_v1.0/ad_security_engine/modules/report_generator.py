@@ -1,0 +1,684 @@
+"""
+report_generator.py
+--------------------
+ADPulse - Open Source AD Security Assessment Engine
+Generates professional HTML and PDF reports. Fully generic, no vendor branding.
+Output is saved to disk for manual sharing — no email dependency.
+
+ADPulse Brand Colors:
+  Primary Blue : #0053A4
+  Orange Accent: #FF8800
+  Light Blue   : #e1f4fd
+  Dark Text    : #0a1628
+"""
+
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+# ── ADPulse Brand ────────────────────────────────────────────────────────────
+CS_BLUE        = "#0053A4"
+CS_ORANGE      = "#FF8800"
+CS_LIGHT_BLUE  = "#e1f4fd"
+CS_DARK        = "#0a1628"
+CS_MID         = "#1a3a6b"
+
+SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+SEVERITY_HEX = {
+    "CRITICAL": "#c0152a",
+    "HIGH":     "#d9500a",
+    "MEDIUM":   "#b07d00",
+    "LOW":      "#1a7a3f",
+    "INFO":     CS_BLUE,
+}
+
+SEVERITY_LIGHT = {
+    "CRITICAL": "#fff0f1",
+    "HIGH":     "#fff5ee",
+    "MEDIUM":   "#fffaeb",
+    "LOW":      "#f0faf4",
+    "INFO":     CS_LIGHT_BLUE,
+}
+
+SEVERITY_ICON = {
+    "CRITICAL": "\u26d4",
+    "HIGH":     "\U0001f534",
+    "MEDIUM":   "\U0001f7e1",
+    "LOW":      "\U0001f7e2",
+    "INFO":     "\U0001f535",
+}
+
+# Inline SVG wordmark (ADPulse, no external dependency)
+ADPULSE_LOGO_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 58' height='48'>"
+    "<defs><clipPath id='sc'><path d='M 29 4 L 54 13 L 54 32 Q 54 48 29 56 Q 4 48 4 32 L 4 13 Z'/></clipPath></defs>"
+    "<path d='M 29 4 L 54 13 L 54 32 Q 54 48 29 56 Q 4 48 4 32 L 4 13 Z' fill='#0053A4'/>"
+    "<path d='M 29 9 L 49 17 L 49 32 Q 49 44 29 51 Q 9 44 9 32 L 9 17 Z' fill='none' stroke='rgba(255,255,255,0.15)' stroke-width='1'/>"
+    "<polyline points='9,31 17,31 20,38 22,31 25,14 28,48 31,31 41,31 44,24 47,31 49,31' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round' clip-path='url(#sc)'/>"
+    "<circle cx='25' cy='14' r='2.5' fill='#FF8800' clip-path='url(#sc)'/>"
+    "<text x='64' y='40' font-family='Arial Black,Arial,sans-serif' font-weight='900' font-size='34' fill='white' letter-spacing='-0.5'>AD</text>"
+    "<text x='112' y='40' font-family='Arial Black,Arial,sans-serif' font-weight='900' font-size='34' fill='#FF8800' letter-spacing='-0.5'>Pulse</text>"
+    "<rect x='112' y='44' width='145' height='2.5' rx='1.25' fill='#FF8800' opacity='0.4'/>"
+    "</svg>"
+)
+
+
+# =============================================================================
+#  HTML Report
+# =============================================================================
+
+class HTMLReportGenerator:
+
+    def generate(self, findings, run_id, output_path, company_name="Your Organisation",
+                 domain_info=None, scan_stats=None):
+        html = self._build(findings, run_id, company_name, domain_info)
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
+        logger.info(f"HTML report -> {output_path}")
+        return str(path)
+
+    def _build(self, findings, run_id, company_name, domain_info):
+        now = datetime.now().strftime("%d %B %Y, %H:%M")
+        counts = {s: 0 for s in SEVERITY_ORDER}
+        for f in findings:
+            sev = f.get("severity", "INFO")
+            counts[sev] = counts.get(sev, 0) + 1
+
+        risk_score = min(
+            counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
+            counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
+        )
+        if   risk_score >= 70: risk_label, risk_col = "CRITICAL", SEVERITY_HEX["CRITICAL"]
+        elif risk_score >= 40: risk_label, risk_col = "HIGH",     SEVERITY_HEX["HIGH"]
+        elif risk_score >= 20: risk_label, risk_col = "MEDIUM",   SEVERITY_HEX["MEDIUM"]
+        else:                  risk_label, risk_col = "LOW",      SEVERITY_HEX["LOW"]
+
+        # Stat cards
+        stat_cards = ""
+        for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
+            col  = SEVERITY_HEX[sev]
+            icon = SEVERITY_ICON[sev]
+            stat_cards += f"""
+            <div class="stat-card" style="border-top:4px solid {col};">
+                <div class="stat-icon">{icon}</div>
+                <div class="stat-num" style="color:{col};">{counts[sev]}</div>
+                <div class="stat-lbl">{sev}</div>
+            </div>"""
+
+        # Findings
+        findings_html = ""
+        for f in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity","INFO"), 99)):
+            sev   = f.get("severity", "INFO")
+            col   = SEVERITY_HEX.get(sev, "#666")
+            light = SEVERITY_LIGHT.get(sev, "#fafafa")
+            icon  = SEVERITY_ICON.get(sev, "-")
+            is_new = f.get("is_new", 1)
+
+            affected  = f.get("affected", [])
+            tags_html = "".join(f'<span class="atag">{a}</span>' for a in affected[:25])
+            if len(affected) > 25:
+                tags_html += f'<span class="atag atag-more">+{len(affected)-25} more</span>'
+
+            rem        = f.get("remediation", "").replace("\n", "<br>")
+            new_badge  = '<span class="new-badge">NEW</span>' if is_new else '<span class="rec-badge">RECURRING</span>'
+            first_seen = (f.get("first_seen") or "")[:10] or "This scan"
+
+            findings_html += f"""
+            <div class="finding-card">
+              <div class="finding-top" style="background:{col};">
+                <div class="finding-top-left">
+                  <span class="sev-badge">{icon} {sev}</span>
+                  <span class="cat-label">{f.get('category','')}</span>
+                </div>
+                <div>{new_badge}</div>
+              </div>
+              <div class="finding-body" style="border-left:4px solid {col};background:{light};">
+                <h3 class="finding-title">{f.get('title','')}</h3>
+                <p class="finding-desc">{f.get('description','')}</p>
+                {"<div class='affected-block'><strong>Affected objects (" + str(len(affected)) + "):</strong><div class='tags'>" + tags_html + "</div></div>" if affected else ""}
+                <div class="rem-block">
+                  <div class="rem-label">Remediation</div>
+                  <p class="rem-text">{rem}</p>
+                </div>
+                <div class="finding-foot">
+                  Finding ID: <code>{f.get('finding_id','')}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
+                </div>
+              </div>
+            </div>"""
+
+        domain_html = ""
+        if domain_info:
+            domain_html = f"""
+            <div class="meta-row">
+              <div class="meta-item"><span class="meta-k">Domain</span>
+                <span class="meta-v">{domain_info.get('name') or domain_info.get('base_dn','--')}</span></div>
+              <div class="meta-item"><span class="meta-k">Server</span>
+                <span class="meta-v">{domain_info.get('server','--')}</span></div>
+              <div class="meta-item"><span class="meta-k">Scan ID</span>
+                <span class="meta-v"><code style="font-size:11px;">{run_id[:32]}...</code></span></div>
+              <div class="meta-item"><span class="meta-k">Generated</span>
+                <span class="meta-v">{now}</span></div>
+            </div>"""
+
+        new_count = sum(1 for f in findings if f.get("is_new", 1))
+
+        css = f"""
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+  font-family: 'IBM Plex Sans', 'Segoe UI', Arial, sans-serif;
+  background: #f0f4f8; color: {CS_DARK}; min-height: 100vh;
+}}
+.header {{
+  background: linear-gradient(135deg, {CS_DARK} 0%, {CS_MID} 60%, {CS_BLUE} 100%);
+  position: relative; overflow: hidden;
+}}
+.header::before {{
+  content: ''; position: absolute; inset: 0;
+  background: repeating-linear-gradient(-45deg,
+    transparent, transparent 40px, rgba(255,255,255,0.02) 40px, rgba(255,255,255,0.02) 80px);
+}}
+.header-inner {{
+  position: relative; max-width: 1200px; margin: 0 auto;
+  padding: 28px 40px 24px;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+}}
+.header-text h1 {{
+  font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.5);
+  letter-spacing: 3px; text-transform: uppercase; margin-bottom: 6px;
+}}
+.header-text h2 {{ font-size: 24px; font-weight: 700; color: white; margin-bottom: 3px; }}
+.header-text p   {{ font-size: 12px; color: rgba(255,255,255,0.45); }}
+.risk-pill {{
+  background: {risk_col}; color: white;
+  font-size: 12px; font-weight: 700; padding: 8px 18px;
+  border-radius: 40px; white-space: nowrap; flex-shrink: 0;
+}}
+.orange-bar {{ height: 4px; background: linear-gradient(90deg, {CS_ORANGE} 0%, {CS_BLUE} 100%); }}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 28px 40px; }}
+.stats-row {{
+  display: grid; grid-template-columns: repeat(5,1fr); gap: 14px; margin-bottom: 24px;
+}}
+.stat-card {{
+  background: white; border-radius: 10px; padding: 18px 14px 14px;
+  text-align: center; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.stat-icon {{ font-size: 20px; margin-bottom: 6px; }}
+.stat-num  {{ font-size: 34px; font-weight: 800; line-height: 1; margin-bottom: 4px; }}
+.stat-lbl  {{
+  font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: #8a99b0;
+}}
+.risk-box {{
+  background: white; border-radius: 10px; padding: 16px 22px;
+  display: flex; align-items: center; gap: 20px; margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.risk-score-num {{ font-size: 46px; font-weight: 800; color: {risk_col}; line-height: 1; min-width: 80px; }}
+.risk-bar-wrap  {{ flex: 1; }}
+.risk-bar-label {{ font-size: 11px; color: #8a99b0; margin-bottom: 6px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }}
+.risk-bar-bg    {{ background: #e8eef5; border-radius: 4px; height: 10px; overflow: hidden; }}
+.risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; }}
+.risk-label     {{ font-size: 15px; font-weight: 700; color: {risk_col}; }}
+.meta-box {{
+  background: white; border-radius: 10px; padding: 16px 22px;
+  margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.meta-row  {{ display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }}
+.meta-item {{ display: flex; flex-direction: column; gap: 2px; }}
+.meta-k    {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8a99b0; }}
+.meta-v    {{ font-size: 13px; font-weight: 600; color: {CS_DARK}; }}
+.section-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }}
+.section-header h2 {{ font-size: 17px; font-weight: 700; color: {CS_DARK}; }}
+.count-badge {{
+  background: {CS_BLUE}; color: white; font-size: 11px;
+  font-weight: 700; padding: 2px 10px; border-radius: 12px;
+}}
+.new-info {{ font-size: 11px; color: {CS_ORANGE}; font-weight: 600; }}
+.finding-card {{
+  background: white; border-radius: 10px; overflow: hidden;
+  margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.finding-top {{
+  display: flex; align-items: center;
+  justify-content: space-between; padding: 8px 14px;
+}}
+.finding-top-left {{ display: flex; align-items: center; gap: 10px; }}
+.sev-badge {{ color: white; font-size: 11px; font-weight: 700; }}
+.cat-label {{
+  background: rgba(255,255,255,0.18); color: white;
+  font-size: 10px; padding: 2px 8px; border-radius: 8px;
+}}
+.new-badge {{
+  background: {CS_ORANGE}; color: white;
+  font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 8px;
+}}
+.rec-badge {{
+  background: rgba(255,255,255,0.2); color: white;
+  font-size: 9px; padding: 2px 7px; border-radius: 8px;
+}}
+.finding-body    {{ padding: 14px 18px 12px; border-left-width:4px; border-left-style:solid; }}
+.finding-title   {{ font-size: 14px; font-weight: 700; margin-bottom: 7px; color: {CS_DARK}; }}
+.finding-desc    {{ font-size: 13px; color: #3a4a5e; line-height: 1.6; margin-bottom: 10px; }}
+.affected-block  {{ margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #4a5a6e; }}
+.tags            {{ display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }}
+.atag {{
+  background: #e8eef5; color: {CS_DARK}; padding: 2px 7px;
+  border-radius: 4px; font-size: 10px; font-family: 'Courier New', monospace;
+}}
+.atag-more {{ background: {CS_BLUE}; color: white; }}
+.rem-block {{
+  background: rgba(255,255,255,0.7); border: 1px solid #dde5ef;
+  border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
+}}
+.rem-label {{
+  font-size: 9px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: {CS_BLUE}; margin-bottom: 5px;
+}}
+.rem-text {{ font-size: 12px; color: #3a4a5e; line-height: 1.7; }}
+.finding-foot {{ font-size: 9px; color: #aab5c5; padding-top: 7px; border-top: 1px solid rgba(0,0,0,0.05); }}
+code {{
+  font-family: 'Courier New', monospace; background: #edf1f7;
+  padding: 1px 5px; border-radius: 3px; font-size: 11px;
+}}
+.footer {{
+  text-align: center; padding: 28px 40px;
+  font-size: 10px; color: #a0aabb;
+  border-top: 1px solid #dde5ef; margin-top: 12px;
+}}
+.footer strong {{ color: {CS_BLUE}; }}
+.no-findings {{
+  background: white; border-radius: 10px; padding: 48px;
+  text-align: center; color: #8a99b0;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+@media (max-width:900px) {{
+  .stats-row {{ grid-template-columns: repeat(3,1fr); }}
+  .meta-row  {{ grid-template-columns: repeat(2,1fr); }}
+  .header-inner {{ flex-direction: column; align-items: flex-start; }}
+}}"""
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADPulse Report - {company_name}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono&display=swap" rel="stylesheet">
+<style>{css}</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-inner">
+    <div class="logo">{ADPULSE_LOGO_SVG}</div>
+    <div class="header-text">
+      <h1>ADPulse Security Assessment</h1>
+      <h2>{company_name}</h2>
+      <p>Report generated: {now}</p>
+    </div>
+    <div class="risk-pill">Risk: {risk_label} &nbsp; {risk_score}/100</div>
+  </div>
+</div>
+<div class="orange-bar"></div>
+
+<div class="container">
+  <div class="stats-row">{stat_cards}</div>
+
+  <div class="risk-box">
+    <div class="risk-score-num">{risk_score}</div>
+    <div class="risk-bar-wrap">
+      <div class="risk-bar-label">Overall Risk Score / 100</div>
+      <div class="risk-bar-bg"><div class="risk-bar-fill"></div></div>
+    </div>
+    <div class="risk-label">{risk_label}</div>
+  </div>
+
+  {"<div class='meta-box'>" + domain_html + "</div>" if domain_html else ""}
+
+  <div class="section-header">
+    <h2>Security Findings</h2>
+    <span class="count-badge">{len(findings)} total</span>
+    {"<span class='new-info'>&#9888; " + str(new_count) + " new since last scan</span>" if new_count else ""}
+  </div>
+
+  {findings_html if findings else "<div class='no-findings'><div style='font-size:48px;margin-bottom:12px;'>&#9989;</div><strong>No findings detected.</strong><br>Your environment looks clean.</div>"}
+
+</div>
+
+<div class="footer">
+  <strong>ADPulse</strong> &nbsp;&middot;&nbsp;
+  Run ID: {run_id[:36]} &nbsp;&middot;&nbsp; {now}<br>
+  <em>This report is confidential. Do not distribute outside your organisation.</em>
+</div>
+
+</body>
+</html>"""
+
+
+# =============================================================================
+#  PDF Report
+# =============================================================================
+
+class PDFReportGenerator:
+
+    def generate(self, findings, run_id, output_path, company_name="Your Organisation", domain_info=None):
+        try:
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import cm, mm
+            from reportlab.lib import colors
+            from reportlab.platypus import (
+                SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+                HRFlowable, PageBreak, KeepTogether,
+            )
+            from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
+        except ImportError:
+            logger.error("reportlab not installed. pip install reportlab")
+            return ""
+
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now().strftime("%d %B %Y  %H:%M")
+
+        cs_blue   = colors.HexColor(CS_BLUE)
+        cs_orange = colors.HexColor(CS_ORANGE)
+        cs_dark   = colors.HexColor(CS_DARK)
+        cs_mid    = colors.HexColor(CS_MID)
+
+        styles = getSampleStyleSheet()
+
+        def S(name, **kw):
+            base = kw.pop("parent", styles["Normal"])
+            return ParagraphStyle(name, parent=base, **kw)
+
+        H2   = S("H2",  fontSize=13, textColor=cs_dark, fontName="Helvetica-Bold", spaceBefore=14, spaceAfter=8)
+        BODY = S("BD",  fontSize=9.5, textColor=colors.HexColor("#2e3d50"), leading=14, spaceAfter=5)
+        SM   = S("SM",  fontSize=8,   textColor=colors.HexColor("#4a5a6e"), leading=12)
+        REM  = S("RM",  fontSize=8,   textColor=colors.HexColor("#2e3d50"), leading=12)
+        FOOT = S("FT",  fontSize=7,   textColor=colors.HexColor("#8a99b0"), alignment=TA_CENTER)
+
+        # Counts & risk
+        counts = {s: 0 for s in SEVERITY_ORDER}
+        for f in findings:
+            counts[f.get("severity","INFO")] = counts.get(f.get("severity","INFO"), 0) + 1
+        risk_score = min(
+            counts["CRITICAL"]*40 + counts["HIGH"]*15 + counts["MEDIUM"]*5 + counts["LOW"]*1, 100
+        )
+        risk_label = ("CRITICAL" if risk_score>=70 else "HIGH" if risk_score>=40 else "MEDIUM" if risk_score>=20 else "LOW")
+        risk_col   = colors.HexColor(SEVERITY_HEX.get(risk_label, "#666"))
+
+        def _page(canvas, doc):
+            w, h = A4
+            canvas.saveState()
+            # Top bar
+            canvas.setFillColor(cs_dark)
+            canvas.rect(0, h-16*mm, w, 16*mm, fill=1, stroke=0)
+            canvas.setFillColor(cs_orange)
+            canvas.rect(0, h-17.5*mm, w, 1.5*mm, fill=1, stroke=0)
+            # Shield icon (simplified for PDF header)
+            sx, sy = 2*cm, h-14.5*mm
+            canvas.setFillColor(colors.HexColor("#0053A4"))
+            p = canvas.beginPath()
+            p.moveTo(sx+6*mm, sy)
+            p.lineTo(sx+12*mm, sy+2*mm)
+            p.lineTo(sx+12*mm, sy+7*mm)
+            p.curveTo(sx+12*mm, sy+10*mm, sx+6*mm, sy+11.5*mm, sx+6*mm, sy+11.5*mm)
+            p.curveTo(sx+6*mm, sy+11.5*mm, sx, sy+10*mm, sx, sy+7*mm)
+            p.lineTo(sx, sy+2*mm)
+            p.close()
+            canvas.drawPath(p, fill=1, stroke=0)
+            # Pulse dot in shield
+            canvas.setFillColor(colors.HexColor("#FF8800"))
+            canvas.circle(sx+4.5*mm, sy+5*mm, 1*mm, fill=1, stroke=0)
+            # Wordmark
+            canvas.setFillColor(colors.white)
+            canvas.setFont("Helvetica-Bold", 10)
+            canvas.drawString(sx+14*mm, h-10.5*mm, "AD")
+            canvas.setFillColor(colors.HexColor("#FF8800"))
+            canvas.drawString(sx+24*mm, h-10.5*mm, "Pulse")
+            canvas.setFillColor(colors.HexColor("#8aafd8"))
+            canvas.setFont("Helvetica", 8)
+            canvas.drawString(sx+46*mm, h-10.5*mm, "Active Directory Security Assessment")
+            canvas.setFillColor(colors.white)
+            canvas.drawRightString(w-2*cm, h-10.5*mm, company_name)
+            # Bottom footer
+            canvas.setFillColor(colors.HexColor("#e8eef5"))
+            canvas.rect(0, 0, w, 11*mm, fill=1, stroke=0)
+            canvas.setFillColor(colors.HexColor("#8a99b0"))
+            canvas.setFont("Helvetica", 7)
+            canvas.drawString(2*cm, 4*mm, f"CONFIDENTIAL  |  ADPulse  |  {now}")
+            canvas.drawRightString(w-2*cm, 4*mm, f"Page {doc.page}")
+            canvas.restoreState()
+
+        doc = SimpleDocTemplate(
+            str(path), pagesize=A4,
+            leftMargin=2*cm, rightMargin=2*cm,
+            topMargin=2.2*cm, bottomMargin=1.7*cm,
+        )
+
+        story = []
+
+        # ── Cover ────────────────────────────────────────────────────────
+        story.append(Spacer(1, 1.2*cm))
+        story.append(Paragraph(
+            f"<font color='{CS_BLUE}'><b>ADPulse</b></font>",
+            S("CV", fontSize=34, fontName="Helvetica-Bold", spaceAfter=4)
+        ))
+        story.append(Paragraph("Active Directory Security Assessment Report",
+            S("CVS", fontSize=13, textColor=colors.HexColor("#4a6a8a"), spaceAfter=4)))
+        story.append(Paragraph(company_name,
+            S("CVD", fontSize=10, textColor=cs_dark, spaceAfter=2)))
+        story.append(Paragraph(f"Generated: {now}",
+            S("CVT", fontSize=9, textColor=colors.HexColor("#8a99b0"), spaceAfter=18)))
+        story.append(HRFlowable(width="100%", thickness=3, color=cs_orange, spaceAfter=14))
+
+        # Risk table
+        rt = Table([
+            ["Overall Risk Score", "Risk Level", "Total Findings"],
+            [
+                Paragraph(f"<b>{risk_score}/100</b>",
+                    S("RS", fontSize=26, textColor=risk_col, fontName="Helvetica-Bold")),
+                Paragraph(f"<b>{risk_label}</b>",
+                    S("RL", fontSize=17, textColor=risk_col, fontName="Helvetica-Bold")),
+                Paragraph(f"<b>{len(findings)}</b>",
+                    S("RF", fontSize=26, textColor=cs_blue, fontName="Helvetica-Bold")),
+            ]
+        ], colWidths=[5.7*cm, 5.7*cm, 5.6*cm])
+        rt.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), cs_dark),
+            ("TEXTCOLOR",     (0,0), (-1,0), colors.white),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,0), 9),
+            ("ALIGN",         (0,0), (-1,-1), "CENTER"),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING",    (0,0), (-1,-1), 10),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+            ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#dde5ef")),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.white]),
+        ]))
+        story.append(rt)
+        story.append(Spacer(1, 14))
+
+        # Severity breakdown
+        sev_descs = {
+            "CRITICAL": "Immediate action required — domain compromise risk",
+            "HIGH":     "Urgent remediation recommended",
+            "MEDIUM":   "Address within your security review cycle",
+            "LOW":      "Low risk — next maintenance window",
+            "INFO":     "Informational — no immediate action required",
+        }
+        sev_data = [["Severity", "Count", "Guidance"]]
+        for sev in ["CRITICAL","HIGH","MEDIUM","LOW","INFO"]:
+            c = colors.HexColor(SEVERITY_HEX[sev])
+            sev_data.append([
+                Paragraph(f"<b>{sev}</b>",
+                    S(f"SC{sev}", fontSize=9, textColor=c, fontName="Helvetica-Bold")),
+                Paragraph(str(counts[sev]),
+                    S(f"SN{sev}", fontSize=13, textColor=c, fontName="Helvetica-Bold",
+                      alignment=TA_CENTER)),
+                Paragraph(sev_descs[sev], SM),
+            ])
+        st = Table(sev_data, colWidths=[3.5*cm, 2.5*cm, 11*cm])
+        st.setStyle(TableStyle([
+            ("BACKGROUND",    (0,0), (-1,0), colors.HexColor("#f0f4f8")),
+            ("FONTNAME",      (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTSIZE",      (0,0), (-1,0), 8),
+            ("TEXTCOLOR",     (0,0), (-1,0), colors.HexColor("#4a5a6e")),
+            ("ALIGN",         (1,0), (1,-1), "CENTER"),
+            ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+            ("TOPPADDING",    (0,0), (-1,-1), 7),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 7),
+            ("LEFTPADDING",   (0,0), (-1,-1), 10),
+            ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#dde5ef")),
+            ("ROWBACKGROUNDS",(0,1), (-1,-1), [colors.white, colors.HexColor("#f8fafc")]),
+        ]))
+        story.append(st)
+
+        if domain_info:
+            story.append(Spacer(1, 14))
+            info = [
+                ["Domain", str(domain_info.get("name") or domain_info.get("base_dn","--"))],
+                ["Server", str(domain_info.get("server","--"))],
+                ["Run ID", run_id[:36]],
+            ]
+            it = Table(info, colWidths=[3*cm, 14*cm])
+            it.setStyle(TableStyle([
+                ("FONTNAME",      (0,0), (0,-1), "Helvetica-Bold"),
+                ("FONTSIZE",      (0,0), (-1,-1), 8),
+                ("TEXTCOLOR",     (0,0), (0,-1), colors.HexColor("#4a5a6e")),
+                ("TOPPADDING",    (0,0), (-1,-1), 5),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+                ("ROWBACKGROUNDS",(0,0), (-1,-1), [colors.white, colors.HexColor("#f8fafc")]),
+                ("GRID",          (0,0), (-1,-1), 0.5, colors.HexColor("#dde5ef")),
+            ]))
+            story.append(it)
+
+        story.append(PageBreak())
+
+        # ── Findings ─────────────────────────────────────────────────────
+        story.append(Paragraph(f"Security Findings  ({len(findings)} total)", H2))
+        story.append(HRFlowable(width="100%", thickness=2, color=cs_orange, spaceAfter=10))
+
+        if not findings:
+            story.append(Paragraph("No security findings detected in this scan.", BODY))
+        else:
+            for f in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity","INFO"),99)):
+                sev   = f.get("severity","INFO")
+                scol  = colors.HexColor(SEVERITY_HEX.get(sev,"#666"))
+                lcol  = colors.HexColor(SEVERITY_LIGHT.get(sev,"#fafafa"))
+                is_new = f.get("is_new",1)
+                icon   = SEVERITY_ICON.get(sev,"")
+
+                elems = []
+
+                # Header bar
+                hdr_label = "NEW" if is_new else "RECURRING"
+                hdr_color = colors.HexColor("#ffd080") if is_new else colors.HexColor("#8aafd8")
+                hdr = Table([[
+                    Paragraph(f"<b>{icon} {sev}</b>",
+                        S("FH", fontSize=9, textColor=colors.white, fontName="Helvetica-Bold")),
+                    Paragraph(f.get("category",""),
+                        S("FC", fontSize=8, textColor=colors.HexColor("#c8d8ea"))),
+                    Paragraph(f"<b>{hdr_label}</b>",
+                        S("FN", fontSize=8, textColor=hdr_color, fontName="Helvetica-Bold",
+                          alignment=TA_RIGHT)),
+                ]], colWidths=[3.5*cm, 9.5*cm, 4*cm])
+                hdr.setStyle(TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,-1), scol),
+                    ("TOPPADDING",    (0,0), (-1,-1), 6),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 10),
+                    ("RIGHTPADDING",  (-1,0),(-1,-1), 10),
+                    ("VALIGN",        (0,0), (-1,-1), "MIDDLE"),
+                ]))
+                elems.append(hdr)
+
+                # Title + desc
+                body_rows = [
+                    Paragraph(f"<b>{f.get('title','')}</b>",
+                        S("FT", fontSize=11, textColor=CS_DARK, fontName="Helvetica-Bold", spaceAfter=5)),
+                    Paragraph(f.get("description",""), BODY),
+                ]
+                affected = f.get("affected",[])
+                if affected:
+                    aff_str = ", ".join(str(a) for a in affected[:30])
+                    if len(affected)>30: aff_str += f" (+{len(affected)-30} more)"
+                    body_rows.append(Paragraph(f"<b>Affected ({len(affected)}):</b>  {aff_str}", SM))
+
+                bt = Table([[row] for row in body_rows], colWidths=[17*cm])
+                bt.setStyle(TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,-1), lcol),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 12),
+                    ("RIGHTPADDING",  (0,0), (-1,-1), 12),
+                    ("TOPPADDING",    (0,0), (-1,-1), 8),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                    ("LINEAFTER",     (0,0), (0,-1), 3, scol),
+                ]))
+                elems.append(bt)
+
+                # Remediation
+                rem_text = f.get("remediation","").replace("\n","<br/>")
+                rt2 = Table(
+                    [[Paragraph(
+                        f"<font color='{CS_BLUE}'><b>REMEDIATION</b></font><br/>{rem_text}", REM
+                    )]],
+                    colWidths=[17*cm],
+                )
+                rt2.setStyle(TableStyle([
+                    ("BACKGROUND",    (0,0), (-1,-1), colors.HexColor("#f5f8fb")),
+                    ("LEFTPADDING",   (0,0), (-1,-1), 12),
+                    ("RIGHTPADDING",  (0,0), (-1,-1), 12),
+                    ("TOPPADDING",    (0,0), (-1,-1), 8),
+                    ("BOTTOMPADDING", (0,0), (-1,-1), 10),
+                    ("LINEABOVE",     (0,0), (-1,0), 1, colors.HexColor("#dde5ef")),
+                    ("LINEAFTER",     (0,0), (0,-1), 3, scol),
+                ]))
+                elems.append(rt2)
+                elems.append(Spacer(1, 8))
+                story.append(KeepTogether(elems))
+
+        doc.build(story, onFirstPage=_page, onLaterPages=_page)
+        logger.info(f"PDF report -> {output_path}")
+        return str(path)
+
+
+# =============================================================================
+#  Report Manager
+# =============================================================================
+
+class ReportManager:
+
+    def __init__(self, config: dict):
+        self.output_dir   = Path(config.get("output_dir", "./output"))
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.gen_pdf      = config.get("generate_pdf",  "true").lower() == "true"
+        self.gen_html     = config.get("generate_html", "true").lower() == "true"
+        self.company_name = config.get("company_name", "Your Organisation")
+
+    def generate_all(self, findings, run_id, domain_info=None):
+        ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
+        paths = {}
+
+        if self.gen_html:
+            p = str(self.output_dir / f"ADPulse_Report_{ts}.html")
+            try:
+                paths["html"] = HTMLReportGenerator().generate(
+                    findings, run_id, p, self.company_name, domain_info)
+            except Exception as e:
+                logger.error(f"HTML generation failed: {e}")
+
+        if self.gen_pdf:
+            p = str(self.output_dir / f"ADPulse_Report_{ts}.pdf")
+            try:
+                paths["pdf"] = PDFReportGenerator().generate(
+                    findings, run_id, p, self.company_name, domain_info)
+            except Exception as e:
+                logger.error(f"PDF generation failed: {e}")
+
+        return paths
