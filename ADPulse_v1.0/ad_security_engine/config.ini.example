@@ -47,6 +47,11 @@ timeout = 30
 # How often to run a full scan (in hours)
 scan_interval_hours = 6
 
+# Maximum number of parallel LDAP queries during a scan (default: 8)
+ldap_threads = 8
+# Days since last logon before a privileged account is flagged as dormant
+dormant_admin_days = 90
+
 # Days of inactivity before an account is flagged as stale
 stale_account_days = 60
 
