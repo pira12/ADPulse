@@ -158,6 +158,24 @@ class DetectionEngine:
             ad_data.get("privileged_members", {}),
         )
 
+        # New detections — Improvement 3
+        findings += self.detect_dcsync_rights(
+            ad_data.get("domain_acl", []),
+            ad_data.get("domain_controllers", []),
+        )
+        findings += self.detect_dormant_privileged_accounts(
+            ad_data.get("users", []),
+            ad_data.get("privileged_members", {}),
+        )
+        findings += self.detect_nested_privilege(
+            ad_data.get("all_groups", []),
+            ad_data.get("privileged_members", {}),
+        )
+        findings += self.detect_privileged_spn(
+            ad_data.get("kerberoastable", []),
+            ad_data.get("privileged_members", {}),
+        )
+
         # Delta-based detections (require a baseline)
         if baseline and previous_run_id:
             findings += self.detect_privileged_group_changes(
