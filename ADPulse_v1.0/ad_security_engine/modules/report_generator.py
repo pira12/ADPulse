@@ -1012,7 +1012,7 @@ class PDFReportGenerator:
                         spaceAfter=4,
                     )
                     policy_reason = f.get("policy_reason", "")
-                    policy_expires = f.get("policy_expires", "")
+                    policy_expires = f.get("policy_expires") or ""
                     exp_str = f" \u2014 expires {policy_expires}" if policy_expires else ""
                     body_rows.append(Paragraph(
                         f"&#128295; In remediation: {policy_reason}{exp_str}",
