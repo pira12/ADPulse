@@ -389,6 +389,120 @@ class LDAPCollector:
         return results
 
     # ------------------------------------------------------------------ #
+    #  Additional Security Queries (Read-Only)                             #
+    # ------------------------------------------------------------------ #
+
+    def get_password_not_required_accounts(self) -> list:
+        """
+        Accounts with PASSWD_NOTREQD flag (UAC 0x20).
+        These accounts can have an empty password — a critical misconfiguration.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "whenCreated", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=32)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with PASSWD_NOTREQD.")
+        return results
+
+    def get_reversible_encryption_accounts(self) -> list:
+        """
+        Accounts storing passwords with reversible encryption (UAC 0x80).
+        Effectively plaintext password storage — a severe weakness.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=128)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with reversible encryption.")
+        return results
+
+    def get_accounts_with_sid_history(self) -> list:
+        """
+        Accounts with SID History attribute set.
+        SID History can be abused for cross-domain privilege escalation.
+        Readable by any authenticated domain user.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "sIDHistory",
+            "adminCount", "userAccountControl", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)(sIDHistory=*))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with SID History.")
+        return results
+
+    def get_protected_users_members(self) -> list:
+        """
+        Get members of the 'Protected Users' security group.
+        Privileged accounts NOT in this group miss important protections.
+        """
+        group_filter = "(&(objectClass=group)(sAMAccountName=Protected Users))"
+        groups = self._search(group_filter, ["member", "distinguishedName"])
+        if groups:
+            members = groups[0].get("member") or []
+            if isinstance(members, str):
+                members = [members]
+            logger.info(f"Protected Users group has {len(members)} members.")
+            return members
+        logger.warning("Protected Users group not found.")
+        return []
+
+    def get_users_with_description_passwords(self) -> list:
+        """
+        Find user accounts whose description field contains password-like strings.
+        A surprisingly common bad practice — readable by any domain user.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "description",
+            "adminCount", "distinguishedName",
+        ]
+        # Search for common password indicators in description
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(|(description=*pass*)(description=*pwd*)(description=*wachtwoord*)"
+            "(description=*mot de passe*)(description=*contraseña*))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with potential passwords in description.")
+        return results
+
+    def get_computers_without_laps(self) -> list:
+        """
+        Find computer accounts without LAPS (Local Administrator Password Solution).
+        Checks for the ms-Mcs-AdmPwdExpirationTime attribute — if absent, LAPS
+        is likely not deployed on that machine. Readable by standard users.
+        """
+        attrs = [
+            "sAMAccountName", "dNSHostName", "operatingSystem",
+            "ms-Mcs-AdmPwdExpirationTime", "distinguishedName",
+        ]
+        # Computers without the LAPS expiration attribute (LAPS not deployed)
+        search_filter = (
+            "(&(objectClass=computer)"
+            "(!(ms-Mcs-AdmPwdExpirationTime=*))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=8192)))"  # Exclude DCs
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} computers without LAPS.")
+        return results
+
+    # ------------------------------------------------------------------ #
     #  Domain Info                                                         #
     # ------------------------------------------------------------------ #
 

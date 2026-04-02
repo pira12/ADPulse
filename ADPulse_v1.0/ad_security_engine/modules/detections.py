@@ -129,6 +129,21 @@ class DetectionEngine:
         findings += self.detect_stale_computers(ad_data.get("computers", []))
         findings += self.detect_old_operating_systems(ad_data.get("computers", []))
 
+        # Additional security detections (read-only, low-privilege)
+        findings += self.detect_password_not_required(ad_data.get("pwd_not_required", []))
+        findings += self.detect_reversible_encryption(ad_data.get("reversible_encryption", []))
+        findings += self.detect_sid_history(ad_data.get("sid_history", []))
+        findings += self.detect_description_passwords(ad_data.get("description_passwords", []))
+        findings += self.detect_protected_users_coverage(
+            ad_data.get("privileged_members", {}),
+            ad_data.get("protected_users", []),
+        )
+        findings += self.detect_machine_account_quota(ad_data.get("domain_info"))
+        findings += self.detect_computers_without_laps(
+            ad_data.get("computers_without_laps", []),
+            ad_data.get("computers", []),
+        )
+
         # Delta-based detections (require a baseline)
         if baseline and previous_run_id:
             findings += self.detect_privileged_group_changes(
@@ -672,6 +687,268 @@ class DetectionEngine:
             })
 
         return findings
+
+    # ------------------------------------------------------------------ #
+    #  Additional Security Detections (Read-Only / Low-Privilege)         #
+    # ------------------------------------------------------------------ #
+
+    def detect_password_not_required(self, accounts: list) -> list:
+        """
+        Accounts with PASSWD_NOTREQD flag — can have empty passwords.
+        This is a critical misconfiguration often left from legacy migrations.
+        """
+        if not accounts:
+            return []
+
+        names = [_account_name(a) for a in accounts]
+        privileged = [_account_name(a) for a in accounts if int(a.get("adminCount") or 0) > 0]
+        severity = "CRITICAL" if privileged else "HIGH"
+
+        return [{
+            "finding_id": "PWD-002-NOT-REQUIRED",
+            "category": "Password Hygiene",
+            "severity": severity,
+            "title": "Accounts with Password Not Required Flag",
+            "description": (
+                f"{len(accounts)} enabled account(s) have the PASSWD_NOTREQD flag set. "
+                "These accounts are permitted to have an empty password, meaning they can "
+                "be accessed without any authentication if the password is actually blank."
+                + (f" {len(privileged)} privileged account(s) are affected — this is CRITICAL." if privileged else "")
+            ),
+            "affected": names,
+            "details": {"count": len(accounts), "privileged_count": len(privileged)},
+            "remediation": (
+                "1. Remove the PASSWD_NOTREQD flag from all accounts immediately.\n"
+                "2. Force a password reset on all affected accounts.\n"
+                "3. Audit whether any of these accounts have blank passwords.\n"
+                "4. Investigate the origin — often set during bulk imports or migrations."
+            ),
+        }]
+
+    def detect_reversible_encryption(self, accounts: list) -> list:
+        """
+        Accounts with reversible encryption — passwords stored as near-plaintext.
+        """
+        if not accounts:
+            return []
+
+        names = [_account_name(a) for a in accounts]
+
+        return [{
+            "finding_id": "PWD-003-REVERSIBLE-ENC",
+            "category": "Password Hygiene",
+            "severity": "HIGH",
+            "title": "Accounts with Reversible Encryption Enabled",
+            "description": (
+                f"{len(accounts)} account(s) store their passwords using reversible encryption. "
+                "This is effectively plaintext storage — anyone with access to the AD database "
+                "(ntds.dit) can recover these passwords without cracking. This is only required "
+                "for CHAP/Digest authentication, which is extremely rare in modern environments."
+            ),
+            "affected": names,
+            "details": {"count": len(accounts)},
+            "remediation": (
+                "1. Remove the 'Store password using reversible encryption' flag.\n"
+                "2. Force a password reset on all affected accounts.\n"
+                "3. Ensure no applications depend on CHAP or Digest authentication.\n"
+                "4. Check if a GPO is enforcing this setting and remove it."
+            ),
+        }]
+
+    def detect_sid_history(self, accounts: list) -> list:
+        """
+        Accounts with SID History — can be abused for privilege escalation.
+        """
+        if not accounts:
+            return []
+
+        names = [_account_name(a) for a in accounts]
+        privileged = [_account_name(a) for a in accounts if int(a.get("adminCount") or 0) > 0]
+
+        return [{
+            "finding_id": "PRIV-002-SID-HISTORY",
+            "category": "Privileged Access",
+            "severity": "HIGH" if privileged else "MEDIUM",
+            "title": "Accounts with SID History",
+            "description": (
+                f"{len(accounts)} account(s) have the sIDHistory attribute populated. "
+                "SID History is used during domain migrations to preserve access to resources "
+                "in the source domain. After migration, leftover SID History entries can be "
+                "abused for privilege escalation — an attacker can inject SIDs of privileged "
+                "groups (e.g., Domain Admins) into this attribute to gain unauthorized access."
+                + (f" {len(privileged)} are privileged accounts." if privileged else "")
+            ),
+            "affected": names,
+            "details": {"count": len(accounts), "privileged_count": len(privileged)},
+            "remediation": (
+                "1. If domain migration is complete, clear SID History from all accounts.\n"
+                "2. Enable SID Filtering on domain trusts to block SID History abuse.\n"
+                "3. Monitor for Event ID 4765 (SID History added) in security logs.\n"
+                "4. Use 'netdom trust /quarantine:yes' to enable SID filtering."
+            ),
+        }]
+
+    def detect_description_passwords(self, accounts: list) -> list:
+        """
+        Accounts with potential passwords stored in the description field.
+        Description is readable by ALL domain users — a common data leak.
+        """
+        if not accounts:
+            return []
+
+        names = []
+        for a in accounts:
+            name = _account_name(a)
+            desc = str(a.get("description") or "")[:60]
+            names.append(f"{name} (desc: '{desc}...')" if len(desc) > 10 else f"{name} (desc: '{desc}')")
+
+        return [{
+            "finding_id": "PWD-004-DESC-PASSWORD",
+            "category": "Password Hygiene",
+            "severity": "HIGH",
+            "title": "Potential Passwords in Account Description Fields",
+            "description": (
+                f"{len(accounts)} account(s) have description fields containing password-related "
+                "keywords. The description attribute is readable by ANY authenticated domain user. "
+                "Storing passwords here exposes credentials to all users in the domain."
+            ),
+            "affected": names,
+            "details": {"count": len(accounts)},
+            "remediation": (
+                "1. Immediately remove passwords from all description fields.\n"
+                "2. Rotate the passwords for all affected accounts.\n"
+                "3. Educate administrators about proper credential storage.\n"
+                "4. Consider using a Privileged Access Management (PAM) solution."
+            ),
+        }]
+
+    def detect_protected_users_coverage(self, privileged_members: dict, protected_users: list) -> list:
+        """
+        Check if privileged accounts are in the Protected Users group.
+        Protected Users provides hardened Kerberos protections.
+        """
+        # Build set of all privileged member DNs
+        all_privileged_dns = set()
+        for members in privileged_members.values():
+            for m in members:
+                all_privileged_dns.add(m.lower())
+
+        if not all_privileged_dns:
+            return []
+
+        protected_dns = {dn.lower() for dn in protected_users}
+        unprotected = []
+        for dn in all_privileged_dns:
+            if dn not in protected_dns:
+                cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "")
+                unprotected.append(cn)
+
+        if not unprotected:
+            return []
+
+        return [{
+            "finding_id": "PRIV-003-NO-PROTECTED-USERS",
+            "category": "Privileged Access",
+            "severity": "MEDIUM",
+            "title": "Privileged Accounts Not in Protected Users Group",
+            "description": (
+                f"{len(unprotected)} privileged account(s) are NOT members of the 'Protected Users' "
+                "security group. Protected Users enforces: no NTLM authentication, no DES/RC4 "
+                "Kerberos encryption, no delegation, no credential caching, and 4-hour TGT lifetime. "
+                "These protections significantly reduce the attack surface for privileged accounts."
+            ),
+            "affected": unprotected[:30],
+            "details": {"count": len(unprotected), "total_privileged": len(all_privileged_dns)},
+            "remediation": (
+                "1. Add all privileged user accounts to the 'Protected Users' group.\n"
+                "2. Test thoroughly — some legacy apps may break with Protected Users.\n"
+                "3. Note: Service accounts should NOT be in Protected Users (delegation breaks).\n"
+                "4. Ensure domain functional level is Windows Server 2012 R2 or higher."
+            ),
+        }]
+
+    def detect_machine_account_quota(self, domain_info: dict) -> list:
+        """
+        Check ms-DS-MachineAccountQuota — if >0, any user can join machines to the domain.
+        """
+        if not domain_info:
+            return []
+
+        quota = domain_info.get("ms-DS-MachineAccountQuota")
+        if quota is None:
+            return []
+
+        try:
+            quota = int(quota)
+        except (TypeError, ValueError):
+            return []
+
+        if quota <= 0:
+            return []
+
+        return [{
+            "finding_id": "CONF-001-MACHINE-QUOTA",
+            "category": "Domain Configuration",
+            "severity": "MEDIUM",
+            "title": f"Machine Account Quota Allows User-Joined Computers (Quota: {quota})",
+            "description": (
+                f"ms-DS-MachineAccountQuota is set to {quota}. This means ANY authenticated "
+                "domain user can join up to {quota} computers to the domain without admin approval. "
+                "Attacker-controlled machines joined to the domain can be used for relay attacks, "
+                "resource-based constrained delegation (RBCD) abuse, and lateral movement."
+            ),
+            "affected": [f"Domain (quota={quota})"],
+            "details": {"current_quota": quota, "recommended": 0},
+            "remediation": (
+                "1. Set ms-DS-MachineAccountQuota to 0 to prevent unauthorized domain joins.\n"
+                "2. Use delegated permissions for IT staff who need to join machines.\n"
+                "3. Audit recently joined computers for unauthorized additions.\n"
+                "4. Consider implementing a computer naming convention policy."
+            ),
+        }]
+
+    def detect_computers_without_laps(self, computers_without_laps: list, all_computers: list) -> list:
+        """
+        Computers without LAPS deployed — local admin passwords may be shared/static.
+        """
+        if not computers_without_laps:
+            return []
+
+        total = len(all_computers) if all_computers else len(computers_without_laps)
+        coverage_pct = ((total - len(computers_without_laps)) / total * 100) if total > 0 else 0
+
+        names = []
+        for c in computers_without_laps[:30]:
+            name = c.get("sAMAccountName") or c.get("dNSHostName") or "Unknown"
+            os_name = c.get("operatingSystem") or ""
+            names.append(f"{name} ({os_name})" if os_name else name)
+
+        severity = "HIGH" if coverage_pct < 50 else "MEDIUM"
+
+        return [{
+            "finding_id": "CONF-002-NO-LAPS",
+            "category": "Infrastructure",
+            "severity": severity,
+            "title": f"Computers Without LAPS ({len(computers_without_laps)} of {total})",
+            "description": (
+                f"{len(computers_without_laps)} computer(s) do not have LAPS (Local Administrator "
+                f"Password Solution) deployed ({coverage_pct:.0f}% coverage). Without LAPS, local "
+                "administrator passwords are often identical across machines, enabling trivial "
+                "lateral movement via pass-the-hash after compromising a single workstation."
+            ),
+            "affected": names,
+            "details": {
+                "count": len(computers_without_laps),
+                "total_computers": total,
+                "coverage_pct": round(coverage_pct, 1),
+            },
+            "remediation": (
+                "1. Deploy LAPS (or Windows LAPS in Server 2019+) to all domain-joined machines.\n"
+                "2. Ensure the LAPS GPO is linked to all relevant OUs.\n"
+                "3. Verify LAPS schema extensions are installed in AD.\n"
+                "4. Audit local admin password reuse across your environment."
+            ),
+        }]
 
     # ------------------------------------------------------------------ #
     #  Delta-Based Detections (require baseline comparison)               #

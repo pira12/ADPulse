@@ -65,10 +65,23 @@ logger = logging.getLogger("main")
 
 def load_config(config_path: str) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
-    if not Path(config_path).exists():
+    config_file = Path(config_path)
+    if not config_file.exists():
         print(f"ERROR: Config file not found: {config_path}")
         print("Copy config.ini.example to config.ini and fill in your settings.")
         sys.exit(1)
+
+    # Warn if config file is world-readable (contains credentials)
+    try:
+        import stat
+        mode = config_file.stat().st_mode
+        if mode & stat.S_IROTH:
+            print(f"WARNING: {config_path} is world-readable. This file contains credentials.")
+            print("         Fix with: chmod 600 " + config_path)
+            print()
+    except (OSError, AttributeError):
+        pass  # Skip on Windows or if stat fails
+
     cfg.read(config_path)
     return cfg
 
@@ -145,6 +158,13 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             "gpo_links":             collector.get_gpo_links(),
             "fine_grained_policies": collector.get_fine_grained_password_policies(),
             "domain_info":           collector.get_domain_info(),
+            # Additional read-only security queries
+            "pwd_not_required":      collector.get_password_not_required_accounts(),
+            "reversible_encryption": collector.get_reversible_encryption_accounts(),
+            "sid_history":           collector.get_accounts_with_sid_history(),
+            "protected_users":       collector.get_protected_users_members(),
+            "description_passwords": collector.get_users_with_description_passwords(),
+            "computers_without_laps": collector.get_computers_without_laps(),
         }
 
         logger.info(
@@ -206,12 +226,14 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         for fmt, path in report_paths.items():
             logger.info(f"  → {fmt.upper()} report: {path}")
 
-        # ── Step 6: Send Alerts ──────────────────────────────────────────
+        # ── Step 6: Output Summary & Notifications ────────────────────────
         logger.info("Step 6/6: Generating output summary...")
-        pdf_path = report_paths.get("pdf")
-        alert_sent = alerter.send_alert(findings, run_id, pdf_path)
-        if not alert_sent and cfg["alerting"].get("email_enabled", "false") == "true":
-            logger.info("  → No alert sent (no findings met the severity threshold).")
+        notifier.notify(
+            findings=findings,
+            run_id=run_id,
+            report_paths=report_paths,
+            domain_info=ad_data.get("domain_info"),
+        )
 
         # Finalise
         elapsed = (datetime.now(tz=timezone.utc) - started_at).total_seconds()

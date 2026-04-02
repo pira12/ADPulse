@@ -12,6 +12,7 @@ The summary .txt file in ./output/ is the primary sharing mechanism.
 Copy it into an email, Teams message, or ticket manually.
 """
 
+import json
 import logging
 import os
 import platform
@@ -87,6 +88,7 @@ class OutputNotifier:
         """
         self._print_console_summary(findings, run_id, report_paths, domain_info)
         txt_path = self._write_summary_file(findings, run_id, report_paths, domain_info)
+        self._write_json_export(findings, run_id, domain_info)
 
         if self.write_eventlog and platform.system() == "Windows":
             self._write_windows_event(findings, run_id)
@@ -269,6 +271,64 @@ class OutputNotifier:
         logger.info(f"Summary file -> {out_path}")
         print(f"  Share-ready summary: {out_path}")
         print()
+        return out_path
+
+    # ------------------------------------------------------------------ #
+    #  JSON Export (for SIEM / automation integration)                      #
+    # ------------------------------------------------------------------ #
+
+    def _write_json_export(self, findings, run_id, domain_info) -> str:
+        """
+        Write a machine-readable JSON export of all findings.
+        Useful for SIEM ingestion, ticketing system integration, or automation.
+        """
+        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(self.output_dir / f"ADPulse_Export_{ts}.json")
+
+        counts = {s: 0 for s in SEVERITY_ORDER}
+        for f in findings:
+            sev = f.get("severity", "INFO")
+            counts[sev] = counts.get(sev, 0) + 1
+
+        risk_score = min(
+            counts["CRITICAL"] * 40 + counts["HIGH"] * 15 + counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
+        )
+
+        export = {
+            "tool": "ADPulse",
+            "version": "1.0",
+            "scan_time": now,
+            "run_id": run_id,
+            "domain": {
+                "name": (domain_info or {}).get("name", ""),
+                "base_dn": (domain_info or {}).get("base_dn", ""),
+                "server": (domain_info or {}).get("server", ""),
+            },
+            "summary": {
+                "total_findings": len(findings),
+                "risk_score": risk_score,
+                "by_severity": counts,
+            },
+            "findings": [
+                {
+                    "finding_id": f.get("finding_id"),
+                    "category": f.get("category"),
+                    "severity": f.get("severity"),
+                    "title": f.get("title"),
+                    "description": f.get("description"),
+                    "affected_count": len(f.get("affected", [])),
+                    "affected": f.get("affected", []),
+                    "remediation": f.get("remediation", ""),
+                    "first_seen": f.get("first_seen"),
+                    "is_new": bool(f.get("is_new", 1)),
+                }
+                for f in findings
+            ],
+        }
+
+        Path(out_path).write_text(json.dumps(export, indent=2, default=str), encoding="utf-8")
+        logger.info(f"JSON export -> {out_path}")
         return out_path
 
     # ------------------------------------------------------------------ #
