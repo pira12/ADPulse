@@ -13,6 +13,7 @@ All data is read-only. No writes are performed.
 import logging
 import os
 import socket
+import struct
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -43,6 +44,82 @@ def domain_to_base_dn(domain: str) -> str:
     """Convert 'company.local' to 'DC=company,DC=local'."""
     parts = domain.strip().split(".")
     return ",".join(f"DC={p}" for p in parts)
+
+
+# DCSync right GUIDs in Windows mixed-endian binary format
+# DS-Replication-Get-Changes:     {1131f6aa-9c07-11d1-f79f-00c04fc2dcd2}
+# DS-Replication-Get-Changes-All: {1131f6ad-9c07-11d1-f79f-00c04fc2dcd2}
+_DCSYNC_GUIDS = {
+    bytes.fromhex("aaf63111079cd111f79f00c04fc2dcd2"),  # Get-Changes
+    bytes.fromhex("adf63111079cd111f79f00c04fc2dcd2"),  # Get-Changes-All
+}
+_ACE_TYPE_ALLOWED_OBJECT = 0x05
+_ACE_OBJECT_TYPE_PRESENT = 0x1
+_ACE_INHERITED_OBJECT_PRESENT = 0x2
+
+
+def _parse_dacl_for_dcsync(sd: bytes) -> list:
+    """
+    Walk a Windows binary SECURITY_DESCRIPTOR_RELATIVE and return raw SID bytes
+    for any ACE granting DCSync rights (DS-Replication-Get-Changes or Get-Changes-All).
+    Returns list of raw SID bytes. Empty list if none found or on parse error.
+    """
+    if not sd or len(sd) < 20:
+        return []
+    try:
+        # SD header: Revision(1) Sbz1(1) Control(2) OffOwner(4) OffGroup(4) OffSacl(4) OffDacl(4)
+        offset_dacl = struct.unpack_from("<I", sd, 16)[0]
+        if offset_dacl == 0 or offset_dacl >= len(sd):
+            return []
+
+        # ACL header: Revision(1) Sbz1(1) AclSize(2) AceCount(2) Sbz2(2)
+        ace_count = struct.unpack_from("<H", sd, offset_dacl + 4)[0]
+        ace_offset = offset_dacl + 8
+
+        sid_bytes_list = []
+        for _ in range(ace_count):
+            if ace_offset + 4 > len(sd):
+                break
+            ace_type, _ace_flags, ace_size = struct.unpack_from("<BBH", sd, ace_offset)
+
+            if ace_type == _ACE_TYPE_ALLOWED_OBJECT and ace_offset + ace_size <= len(sd):
+                # ACCESS_ALLOWED_OBJECT_ACE: Header(4) Mask(4) Flags(4) [ObjectType(16)] [InhType(16)] SID
+                flags = struct.unpack_from("<I", sd, ace_offset + 8)[0]
+                guid_start = ace_offset + 12
+
+                if flags & _ACE_OBJECT_TYPE_PRESENT:
+                    obj_type = sd[guid_start: guid_start + 16]
+                    if obj_type in _DCSYNC_GUIDS:
+                        # Skip past ObjectType and optional InheritedObjectType to reach SID
+                        sid_start = guid_start + 16
+                        if flags & _ACE_INHERITED_OBJECT_PRESENT:
+                            sid_start += 16
+                        if sid_start < ace_offset + ace_size:
+                            sid_size = 8 + sd[sid_start + 1] * 4
+                            sid_bytes_list.append(bytes(sd[sid_start: sid_start + sid_size]))
+
+            ace_offset += ace_size
+            if ace_size == 0:
+                break
+        return sid_bytes_list
+    except (struct.error, IndexError):
+        return []
+
+
+def _sid_bytes_to_str(sid_bytes: bytes) -> str:
+    """Convert raw Windows SID bytes to S-R-A-SA... string."""
+    if len(sid_bytes) < 8:
+        return "S-?"
+    revision = sid_bytes[0]
+    sub_count = sid_bytes[1]
+    authority = int.from_bytes(sid_bytes[2:8], "big")
+    subs = struct.unpack_from(f"<{sub_count}I", sid_bytes, 8)
+    return f"S-{revision}-{authority}-" + "-".join(str(s) for s in subs)
+
+
+def _sid_bytes_to_ldap_filter(sid_bytes: bytes) -> str:
+    """Escape SID bytes for use in an LDAP search filter."""
+    return "".join(f"\\{b:02x}" for b in sid_bytes)
 
 
 class LDAPCollector:
@@ -690,3 +767,56 @@ class LDAPCollector:
         info = self.get_domain_info()
         self.disconnect()
         return {"success": True, "domain_info": info}
+
+    def get_domain_acl(self) -> list:
+        """
+        Query the nTSecurityDescriptor on the domain root and return a list of
+        dicts for accounts with DCSync rights (non-DC principals only).
+
+        Each dict: {"sam_account_name": str, "sid": str, "dn": str}
+        Returns empty list if the attribute is inaccessible or unparseable.
+        """
+        try:
+            from ldap3 import BASE
+            self.conn.search(
+                search_base=self.base_dn,
+                search_filter="(objectClass=*)",
+                search_scope=BASE,
+                attributes=["nTSecurityDescriptor"],
+            )
+            if not self.conn.entries:
+                return []
+
+            sd = self.conn.entries[0]["nTSecurityDescriptor"].value
+            if not sd:
+                return []
+
+            # Parse out raw SID bytes for DCSync ACEs
+            sid_bytes_list = _parse_dacl_for_dcsync(bytes(sd))
+            if not sid_bytes_list:
+                return []
+
+            results = []
+            for sid_bytes in sid_bytes_list:
+                sid_str = _sid_bytes_to_str(sid_bytes)
+                # Resolve SID → sAMAccountName via LDAP
+                ldap_filter = _sid_bytes_to_ldap_filter(sid_bytes)
+                self.conn.search(
+                    self.base_dn,
+                    f"(objectSid={ldap_filter})",
+                    attributes=["sAMAccountName", "distinguishedName"],
+                )
+                if self.conn.entries:
+                    entry = self.conn.entries[0]
+                    results.append({
+                        "sam_account_name": str(entry["sAMAccountName"].value or ""),
+                        "sid": sid_str,
+                        "dn": str(entry["distinguishedName"].value or ""),
+                    })
+                else:
+                    results.append({"sam_account_name": sid_str, "sid": sid_str, "dn": ""})
+
+            return results
+        except Exception as e:
+            logger.warning(f"get_domain_acl failed: {e}")
+            return []
