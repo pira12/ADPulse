@@ -1626,18 +1626,18 @@ class DetectionEngine:
         if not kerberoastable or not privileged_members:
             return []
 
-        # Build set of privileged member DNs (lowercase)
-        priv_dns: set = set()
+        # Build set of privileged member SAM-equivalent names by extracting CN from each DN
+        priv_sams = set()
         for members in privileged_members.values():
             for dn in members:
-                priv_dns.add(dn.lower())
+                cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "").strip().lower()
+                priv_sams.add(cn)
 
         flagged = []
         for acct in kerberoastable:
-            dn = str(acct.get("dn") or acct.get("distinguishedName") or "").lower()
-            if dn in priv_dns:
-                sam = _account_name(acct)
-                flagged.append(sam)
+            sam = _account_name(acct).lower()
+            if sam in priv_sams:
+                flagged.append(_account_name(acct))
 
         if not flagged:
             return []
