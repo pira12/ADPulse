@@ -1,6 +1,6 @@
 # 🛡️ AD Security Continuous Assessment Engine
 
-A **lightweight, automated, read-only** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift — using only a standard domain user account.
+A **lightweight, automated, read-only** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift — just run it on a domain-joined Windows VM with read access to AD.
 
 ---
 
@@ -8,7 +8,7 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 
 | Feature | Details |
 |---------|---------|
-| **Zero admin rights** | Runs as a standard Domain User — LDAP is readable by any authenticated user |
+| **No service account** | Uses integrated Windows auth — just run on a domain-joined VM with AD read access |
 | **Fully automated** | Runs as a Windows Scheduled Task or daemon, zero manual effort |
 | **Baseline & delta** | Detects *changes* between scans, not just point-in-time issues |
 | **Professional reports** | Auto-generates branded PDF and HTML reports |
@@ -47,8 +47,7 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 
 ### 1. Prerequisites
 - Python 3.10+
-- Domain-joined machine (or network access to a DC on port 389/636)
-- A standard domain user account (no admin rights)
+- A domain-joined Windows VM with read access to the AD environment
 
 ### 2. Install Dependencies
 ```bash
@@ -58,15 +57,28 @@ pip install -r requirements.txt
 ### 3. Configure
 ```bash
 cp config.ini.example config.ini
-# Edit config.ini with your DC address, service account credentials, etc.
 ```
+Edit `config.ini` — you only need to fill in **server** and **domain**. Leave username/password blank to use integrated Windows auth.
 
-### 4. Test Connection
+### 4. Where to Find Your Config Values
+
+Open a **Command Prompt** on your Windows VM and run these commands:
+
+| Setting | How to find it | Example value |
+|---------|---------------|---------------|
+| **server** | Run `nltest /dsgetdc:` — look for the **DC** line. Or run `echo %LOGONSERVER%` (returns `\\DC01`, so your server is `DC01.yourdomain.local`). You can also open **Active Directory Users and Computers** — the DC is shown in the tree root. | `dc01.corp.local` |
+| **domain** | Run `echo %USERDNSDOMAIN%` — this prints your domain name directly. Or check **System** > **Full computer name** (e.g. `PC01.corp.local` means domain is `corp.local`). | `corp.local` |
+| **username** | Leave blank — integrated auth uses your Windows login automatically. | *(empty)* |
+| **password** | Leave blank — same reason. | *(empty)* |
+| **port** | Use `389` (default). Only change to `636` if your organization requires encrypted LDAP. | `389` |
+| **use_ssl** | Set to `false` for port 389, `true` for port 636. | `false` |
+
+### 5. Test Connection
 ```bash
 python main.py --test-connection
 ```
 
-### 5. Run Your First Scan
+### 6. Run Your First Scan
 ```bash
 python main.py
 ```
@@ -81,10 +93,10 @@ Reports appear in `./output/` as both HTML and PDF.
 [ldap]
 server   = dc01.company.local   # Your domain controller
 domain   = company.local         # Your domain
-username = svc-secmonitor        # Standard domain user
-password = YourStrongPassword
-port     = 389                   # 636 for LDAPS (recommended)
-use_ssl  = false
+username =                       # Leave blank for integrated Windows auth
+password =                       # Leave blank for integrated Windows auth
+port     = 389                   # 389 = LDAP, 636 = LDAPS (encrypted)
+use_ssl  = false                 # true if using port 636
 
 [scanning]
 scan_interval_hours = 6          # For daemon mode
@@ -108,25 +120,18 @@ output_dir   = ./output
 
 ## 🖥️ Windows Deployment (Recommended)
 
-### Step 1 — Create the service account (run once as Domain Admin)
-```powershell
-.\install\create_service_account.ps1 -OUPath "OU=ServiceAccounts,DC=company,DC=local"
+### Step 1 — Configure
+```bash
+cp config.ini.example config.ini
 ```
-This creates `svc-secmonitor` as a standard domain user with a random strong password.
+Fill in **server** and **domain** (see the table above). Leave username/password blank.
 
-### Step 2 — Configure
-Edit `config.ini` with the generated password and your environment settings.
-
-### Step 3 — Install as Scheduled Task
+### Step 2 — Install as Scheduled Task
 ```powershell
-.\install\install_scheduled_task.ps1 `
-    -ServiceAccount "CORP\svc-secmonitor" `
-    -ServicePassword "YourPassword" `
-    -InstallDir "C:\ADSecurityEngine" `
-    -IntervalHours 6
+.\install\install_scheduled_task.ps1 -InstallDir "C:\ADSecurityEngine" -IntervalHours 6
 ```
 
-The tool now runs automatically every 6 hours. Done.
+The task runs as your current Windows user with integrated AD authentication. No service account needed. Done.
 
 ---
 
@@ -157,7 +162,6 @@ ad_security_engine/
 │   ├── alerting.py                 # Email alerting
 │   └── report_generator.py        # PDF + HTML report generation
 ├── install/
-│   ├── create_service_account.ps1  # Creates the low-priv service account
 │   └── install_scheduled_task.ps1  # Installs as Windows Scheduled Task
 ├── output/                         # Generated reports (auto-created)
 └── logs/                           # Rotating log files (auto-created)
@@ -168,21 +172,9 @@ ad_security_engine/
 ## 🔐 Security Design Principles
 
 1. **Read-only** — No writes to Active Directory. Ever.
-2. **Least privilege** — Standard domain user. LDAP data is readable by design by all domain members.
+2. **No service account** — Uses integrated Windows auth via the logged-in user's Kerberos session.
 3. **No network listeners** — The tool only makes outbound LDAP connections.
 4. **Local storage only** — All data stays in a local SQLite file.
-5. **Credential security** — Service account password is in `config.ini`. Restrict file permissions.
-
-### Securing config.ini on Windows
-```powershell
-# Restrict config.ini to only the service account and Administrators
-$acl = Get-Acl "C:\ADSecurityEngine\config.ini"
-$acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    "CORP\svc-secmonitor", "Read", "Allow")
-$acl.SetAccessRule($rule)
-Set-Acl "C:\ADSecurityEngine\config.ini" $acl
-```
 
 ---
 

@@ -12,7 +12,7 @@ Usage:
     python main.py --diff              # Show what changed between last two scans
     python main.py --daemon            # Run continuously on a schedule
 
-Requires only a standard domain user account. NO admin privileges needed.
+Run on a domain-joined Windows VM with read access to AD. No service account needed.
 """
 
 import argparse
@@ -225,7 +225,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         logger.info(f"Step 1/6: Connecting to Active Directory ({domain_label})...")
         collector = LDAPCollector(ldap_cfg)
         if not collector.connect():
-            error_msg = f"Failed to connect to {domain_label}. Check credentials and server settings."
+            error_msg = f"Failed to connect to {domain_label}. Check server settings and AD access."
             logger.error(error_msg)
             if i == 0:  # Fail on primary domain
                 baseline.fail_scan(run_id, error_msg)
@@ -556,7 +556,7 @@ Examples:
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
 ║        AD Security Continuous Assessment Engine v1.0             ║
-║        Low-Privilege | Read-Only | Automated                     ║
+║        Integrated Auth | Read-Only | Automated                   ║
 ╚══════════════════════════════════════════════════════════════════╝
 """)
 
