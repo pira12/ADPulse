@@ -389,7 +389,121 @@ class LDAPCollector:
         return results
 
     # ------------------------------------------------------------------ #
-    #  Domain Info                                                         #
+    #  Additional Security Queries (Read-Only)                             #
+    # ------------------------------------------------------------------ #
+
+    def get_password_not_required_accounts(self) -> list:
+        """
+        Accounts with PASSWD_NOTREQD flag (UAC 0x20).
+        These accounts can have an empty password — a critical misconfiguration.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "whenCreated", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=32)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with PASSWD_NOTREQD.")
+        return results
+
+    def get_reversible_encryption_accounts(self) -> list:
+        """
+        Accounts storing passwords with reversible encryption (UAC 0x80).
+        Effectively plaintext password storage — a severe weakness.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=128)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with reversible encryption.")
+        return results
+
+    def get_accounts_with_sid_history(self) -> list:
+        """
+        Accounts with SID History attribute set.
+        SID History can be abused for cross-domain privilege escalation.
+        Readable by any authenticated domain user.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "sIDHistory",
+            "adminCount", "userAccountControl", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)(sIDHistory=*))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with SID History.")
+        return results
+
+    def get_protected_users_members(self) -> list:
+        """
+        Get members of the 'Protected Users' security group.
+        Privileged accounts NOT in this group miss important protections.
+        """
+        group_filter = "(&(objectClass=group)(sAMAccountName=Protected Users))"
+        groups = self._search(group_filter, ["member", "distinguishedName"])
+        if groups:
+            members = groups[0].get("member") or []
+            if isinstance(members, str):
+                members = [members]
+            logger.info(f"Protected Users group has {len(members)} members.")
+            return members
+        logger.warning("Protected Users group not found.")
+        return []
+
+    def get_users_with_description_passwords(self) -> list:
+        """
+        Find user accounts whose description field contains password-like strings.
+        A surprisingly common bad practice — readable by any domain user.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "description",
+            "adminCount", "distinguishedName",
+        ]
+        # Search for common password indicators in description
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(|(description=*pass*)(description=*pwd*)(description=*wachtwoord*)"
+            "(description=*mot de passe*)(description=*contraseña*))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with potential passwords in description.")
+        return results
+
+    def get_computers_without_laps(self) -> list:
+        """
+        Find computer accounts without LAPS (Local Administrator Password Solution).
+        Checks for the ms-Mcs-AdmPwdExpirationTime attribute — if absent, LAPS
+        is likely not deployed on that machine. Readable by standard users.
+        """
+        attrs = [
+            "sAMAccountName", "dNSHostName", "operatingSystem",
+            "ms-Mcs-AdmPwdExpirationTime", "distinguishedName",
+        ]
+        # Computers without the LAPS expiration attribute (LAPS not deployed)
+        search_filter = (
+            "(&(objectClass=computer)"
+            "(!(ms-Mcs-AdmPwdExpirationTime=*))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=8192)))"  # Exclude DCs
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} computers without LAPS.")
+        return results
+
+    # ------------------------------------------------------------------ #
+    #  Domain Info & Configuration Queries                                 #
     # ------------------------------------------------------------------ #
 
     def get_domain_info(self) -> dict:
@@ -406,6 +520,130 @@ class LDAPCollector:
             info["server"] = self.server_host
             return info
         return {"base_dn": self.base_dn, "server": self.server_host}
+
+    def get_krbtgt_account(self) -> Optional[dict]:
+        """
+        Get the krbtgt account — the Kerberos ticket-granting service account.
+        Its password age is a critical security indicator.
+        """
+        attrs = [
+            "sAMAccountName", "pwdLastSet", "whenChanged",
+            "whenCreated", "distinguishedName",
+        ]
+        results = self._search(
+            "(&(objectClass=user)(sAMAccountName=krbtgt))", attrs
+        )
+        if results:
+            logger.info("Retrieved krbtgt account info.")
+            return results[0]
+        logger.warning("krbtgt account not found.")
+        return None
+
+    def get_trust_relationships(self) -> list:
+        """
+        Enumerate domain trust relationships.
+        Readable by any authenticated domain user.
+        """
+        attrs = [
+            "cn", "trustPartner", "trustDirection", "trustType",
+            "trustAttributes", "whenCreated", "whenChanged",
+            "flatName", "distinguishedName",
+        ]
+        results = self._search("(objectClass=trustedDomain)", attrs)
+        logger.info(f"Found {len(results)} trust relationships.")
+        return results
+
+    def get_tombstone_lifetime(self) -> Optional[int]:
+        """
+        Get the tombstone lifetime for the forest.
+        Read from CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration.
+        """
+        config_dn = f"CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration,{self.base_dn}"
+        results = self._search(
+            "(objectClass=nTDSService)",
+            ["tombstoneLifetime"],
+            search_base=config_dn,
+        )
+        if results and results[0].get("tombstoneLifetime") is not None:
+            val = results[0]["tombstoneLifetime"]
+            try:
+                lifetime = int(val)
+                logger.info(f"Tombstone lifetime: {lifetime} days.")
+                return lifetime
+            except (TypeError, ValueError):
+                pass
+        logger.debug("Could not retrieve tombstone lifetime.")
+        return None
+
+    def get_dns_zones(self) -> list:
+        """
+        Enumerate DNS zones stored in AD.
+        Readable by any authenticated domain user.
+        """
+        dns_base = f"CN=MicrosoftDNS,DC=DomainDnsZones,{self.base_dn}"
+        attrs = [
+            "dc", "name", "distinguishedName", "whenCreated",
+        ]
+        results = self._search(
+            "(objectClass=dnsZone)", attrs, search_base=dns_base
+        )
+        # Fallback to forest DNS partition
+        if not results:
+            dns_base = f"CN=MicrosoftDNS,DC=ForestDnsZones,{self.base_dn}"
+            results = self._search(
+                "(objectClass=dnsZone)", attrs, search_base=dns_base
+            )
+        logger.info(f"Found {len(results)} DNS zones.")
+        return results
+
+    def get_des_only_accounts(self) -> list:
+        """
+        Accounts with USE_DES_KEY_ONLY flag (UAC 0x200000).
+        DES encryption is trivially breakable.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=2097152)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with DES-only encryption.")
+        return results
+
+    def get_expiring_accounts(self, days_ahead: int = 30) -> list:
+        """
+        Find accounts expiring within the specified number of days.
+        Uses the accountExpires attribute (Windows FILETIME format).
+        """
+        # We fetch all users with accountExpires set and filter in Python
+        # because LDAP range filters on large integers are complex
+        attrs = [
+            "sAMAccountName", "displayName", "accountExpires",
+            "userAccountControl", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(accountExpires>=1)(!(accountExpires=9223372036854775807))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        # Filter to only accounts expiring within the window
+        expiring = []
+        now = datetime.now(tz=timezone.utc)
+        for r in results:
+            exp = r.get("accountExpires")
+            if exp:
+                dt = filetime_to_datetime(int(exp)) if isinstance(exp, (int, str)) else None
+                if dt and dt > now and (dt - now).days <= days_ahead:
+                    r["_expires_dt"] = dt.isoformat()
+                    r["_expires_days"] = (dt - now).days
+                    expiring.append(r)
+        logger.info(f"Found {len(expiring)} accounts expiring within {days_ahead} days.")
+        return expiring
 
     def test_connection(self) -> dict:
         """Test connectivity and return server info."""

@@ -98,19 +98,23 @@ class HTMLReportGenerator:
         elif risk_score >= 20: risk_label, risk_col = "MEDIUM",   SEVERITY_HEX["MEDIUM"]
         else:                  risk_label, risk_col = "LOW",      SEVERITY_HEX["LOW"]
 
-        # Stat cards
+        # Stat cards — clickable to filter by severity
         stat_cards = ""
         for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
             col  = SEVERITY_HEX[sev]
             icon = SEVERITY_ICON[sev]
             stat_cards += f"""
-            <div class="stat-card" style="border-top:4px solid {col};">
+            <div class="stat-card" data-sev-filter="{sev}" onclick="toggleSevFilter('{sev}')"
+                 style="border-top:4px solid {col}; cursor:pointer;" title="Click to filter {sev} findings">
                 <div class="stat-icon">{icon}</div>
                 <div class="stat-num" style="color:{col};">{counts[sev]}</div>
                 <div class="stat-lbl">{sev}</div>
             </div>"""
 
-        # Findings
+        # Collect unique categories for the category filter
+        categories = sorted(set(f.get("category", "") for f in findings))
+
+        # Findings — collapsible cards with data attributes for filtering
         findings_html = ""
         for f in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity","INFO"), 99)):
             sev   = f.get("severity", "INFO")
@@ -118,35 +122,50 @@ class HTMLReportGenerator:
             light = SEVERITY_LIGHT.get(sev, "#fafafa")
             icon  = SEVERITY_ICON.get(sev, "-")
             is_new = f.get("is_new", 1)
+            fid   = f.get("finding_id", "")
+            cat   = f.get("category", "")
 
             affected  = f.get("affected", [])
-            tags_html = "".join(f'<span class="atag">{a}</span>' for a in affected[:25])
+            tags_html = "".join(
+                f'<span class="atag" title="{a}">{a}</span>'
+                for a in affected[:25]
+            )
             if len(affected) > 25:
-                tags_html += f'<span class="atag atag-more">+{len(affected)-25} more</span>'
+                tags_html += f'<span class="atag atag-more" onclick="this.parentElement.parentElement.querySelector(\'.tags-overflow\').style.display=\'flex\';this.style.display=\'none\';">+{len(affected)-25} more (click to show)</span>'
+                tags_html += '<div class="tags tags-overflow" style="display:none;">'
+                tags_html += "".join(f'<span class="atag" title="{a}">{a}</span>' for a in affected[25:])
+                tags_html += '</div>'
 
             rem        = f.get("remediation", "").replace("\n", "<br>")
             new_badge  = '<span class="new-badge">NEW</span>' if is_new else '<span class="rec-badge">RECURRING</span>'
             first_seen = (f.get("first_seen") or "")[:10] or "This scan"
+            new_val    = "new" if is_new else "recurring"
 
             findings_html += f"""
-            <div class="finding-card">
-              <div class="finding-top" style="background:{col};">
+            <div class="finding-card" id="{fid}" data-severity="{sev}" data-category="{cat}"
+                 data-newstatus="{new_val}" data-findingid="{fid}">
+              <div class="finding-top" style="background:{col};" onclick="toggleCard(this.parentElement)" title="Click to expand/collapse">
                 <div class="finding-top-left">
                   <span class="sev-badge">{icon} {sev}</span>
-                  <span class="cat-label">{f.get('category','')}</span>
+                  <span class="cat-label">{cat}</span>
                 </div>
-                <div>{new_badge}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  {new_badge}
+                  <span class="finding-title-preview">{f.get('title','')}</span>
+                  <span class="chevron">&#9660;</span>
+                </div>
               </div>
               <div class="finding-body" style="border-left:4px solid {col};background:{light};">
                 <h3 class="finding-title">{f.get('title','')}</h3>
                 <p class="finding-desc">{f.get('description','')}</p>
                 {"<div class='affected-block'><strong>Affected objects (" + str(len(affected)) + "):</strong><div class='tags'>" + tags_html + "</div></div>" if affected else ""}
-                <div class="rem-block">
+                <div class="rem-block" onclick="event.stopPropagation();">
                   <div class="rem-label">Remediation</div>
                   <p class="rem-text">{rem}</p>
                 </div>
                 <div class="finding-foot">
-                  Finding ID: <code>{f.get('finding_id','')}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
+                  Finding ID: <code>{fid}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
+                  <a class="permalink" href="#{fid}" title="Permalink to this finding">&#128279; link</a>
                 </div>
               </div>
             </div>"""
@@ -166,6 +185,11 @@ class HTMLReportGenerator:
             </div>"""
 
         new_count = sum(1 for f in findings if f.get("is_new", 1))
+
+        # Category filter options
+        cat_options = '<option value="ALL">All Categories</option>'
+        for cat in categories:
+            cat_options += f'<option value="{cat}">{cat}</option>'
 
         css = f"""
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -206,7 +230,11 @@ body {{
 .stat-card {{
   background: white; border-radius: 10px; padding: 18px 14px 14px;
   text-align: center; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+  transition: transform 0.15s, box-shadow 0.15s, opacity 0.2s;
 }}
+.stat-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,83,164,0.15); }}
+.stat-card.active {{ box-shadow: 0 0 0 3px {CS_ORANGE}, 0 4px 16px rgba(0,83,164,0.15); }}
+.stat-card.dimmed {{ opacity: 0.4; }}
 .stat-icon {{ font-size: 20px; margin-bottom: 6px; }}
 .stat-num  {{ font-size: 34px; font-weight: 800; line-height: 1; margin-bottom: 4px; }}
 .stat-lbl  {{
@@ -222,7 +250,7 @@ body {{
 .risk-bar-wrap  {{ flex: 1; }}
 .risk-bar-label {{ font-size: 11px; color: #8a99b0; margin-bottom: 6px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }}
 .risk-bar-bg    {{ background: #e8eef5; border-radius: 4px; height: 10px; overflow: hidden; }}
-.risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; }}
+.risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; transition: width 0.4s; }}
 .risk-label     {{ font-size: 15px; font-weight: 700; color: {risk_col}; }}
 .meta-box {{
   background: white; border-radius: 10px; padding: 16px 22px;
@@ -232,6 +260,38 @@ body {{
 .meta-item {{ display: flex; flex-direction: column; gap: 2px; }}
 .meta-k    {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8a99b0; }}
 .meta-v    {{ font-size: 13px; font-weight: 600; color: {CS_DARK}; }}
+
+/* ── Toolbar ── */
+.toolbar {{
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  flex-wrap: wrap;
+}}
+.search-box {{
+  flex: 1; min-width: 200px; padding: 8px 14px; border: 1px solid #d0d8e4;
+  border-radius: 8px; font-size: 13px; font-family: inherit;
+  background: white; transition: border-color 0.2s;
+}}
+.search-box:focus {{ outline: none; border-color: {CS_BLUE}; box-shadow: 0 0 0 3px rgba(0,83,164,0.12); }}
+.filter-select {{
+  padding: 8px 12px; border: 1px solid #d0d8e4; border-radius: 8px;
+  font-size: 12px; font-family: inherit; background: white; cursor: pointer;
+}}
+.filter-select:focus {{ outline: none; border-color: {CS_BLUE}; }}
+.btn-reset {{
+  padding: 8px 16px; border: none; border-radius: 8px;
+  background: {CS_BLUE}; color: white; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: background 0.15s;
+}}
+.btn-reset:hover {{ background: {CS_MID}; }}
+.btn-collapse {{
+  padding: 8px 16px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; color: {CS_DARK}; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}}
+.filter-count {{
+  font-size: 12px; color: #8a99b0; font-weight: 600;
+}}
+
 .section-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }}
 .section-header h2 {{ font-size: 17px; font-weight: 700; color: {CS_DARK}; }}
 .count-badge {{
@@ -239,20 +299,37 @@ body {{
   font-weight: 700; padding: 2px 10px; border-radius: 12px;
 }}
 .new-info {{ font-size: 11px; color: {CS_ORANGE}; font-weight: 600; }}
+
+/* ── Finding Cards ── */
 .finding-card {{
   background: white; border-radius: 10px; overflow: hidden;
   margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+  transition: opacity 0.2s, max-height 0.3s;
 }}
+.finding-card.hidden {{ display: none; }}
 .finding-top {{
   display: flex; align-items: center;
   justify-content: space-between; padding: 8px 14px;
+  cursor: pointer; user-select: none;
 }}
+.finding-top:hover {{ filter: brightness(1.08); }}
 .finding-top-left {{ display: flex; align-items: center; gap: 10px; }}
 .sev-badge {{ color: white; font-size: 11px; font-weight: 700; }}
 .cat-label {{
   background: rgba(255,255,255,0.18); color: white;
   font-size: 10px; padding: 2px 8px; border-radius: 8px;
 }}
+.finding-title-preview {{
+  color: rgba(255,255,255,0.85); font-size: 11px; font-weight: 500;
+  max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: none;
+}}
+.finding-card.collapsed .finding-title-preview {{ display: inline; }}
+.chevron {{
+  color: rgba(255,255,255,0.6); font-size: 10px;
+  transition: transform 0.2s; display: inline-block;
+}}
+.finding-card.collapsed .chevron {{ transform: rotate(-90deg); }}
 .new-badge {{
   background: {CS_ORANGE}; color: white;
   font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 8px;
@@ -261,16 +338,27 @@ body {{
   background: rgba(255,255,255,0.2); color: white;
   font-size: 9px; padding: 2px 7px; border-radius: 8px;
 }}
-.finding-body    {{ padding: 14px 18px 12px; border-left-width:4px; border-left-style:solid; }}
+.finding-body {{
+  padding: 14px 18px 12px; border-left-width:4px; border-left-style:solid;
+  transition: max-height 0.3s ease, padding 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
+}}
+.finding-card.collapsed .finding-body {{
+  max-height: 0 !important; padding: 0 18px; opacity: 0;
+}}
 .finding-title   {{ font-size: 14px; font-weight: 700; margin-bottom: 7px; color: {CS_DARK}; }}
 .finding-desc    {{ font-size: 13px; color: #3a4a5e; line-height: 1.6; margin-bottom: 10px; }}
 .affected-block  {{ margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #4a5a6e; }}
 .tags            {{ display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }}
+.tags-overflow   {{ flex-wrap: wrap; gap: 4px; margin-top: 4px; }}
 .atag {{
   background: #e8eef5; color: {CS_DARK}; padding: 2px 7px;
   border-radius: 4px; font-size: 10px; font-family: 'Courier New', monospace;
+  cursor: default; transition: background 0.15s;
 }}
-.atag-more {{ background: {CS_BLUE}; color: white; }}
+.atag:hover {{ background: #d0dcea; }}
+.atag-more {{ background: {CS_BLUE}; color: white; cursor: pointer; }}
+.atag-more:hover {{ background: {CS_MID}; }}
 .rem-block {{
   background: rgba(255,255,255,0.7); border: 1px solid #dde5ef;
   border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
@@ -296,11 +384,218 @@ code {{
   text-align: center; color: #8a99b0;
   box-shadow: 0 2px 8px rgba(0,83,164,0.07);
 }}
+
+/* ── Tooltip for affected objects ── */
+.atag[title] {{ position: relative; }}
+
+/* ── Dark mode ── */
+body.dark {{
+  background: #0d1117; color: #c9d1d9;
+}}
+body.dark .stat-card, body.dark .risk-box, body.dark .meta-box,
+body.dark .finding-card, body.dark .card {{ background: #161b22; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }}
+body.dark .search-box, body.dark .filter-select {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+body.dark .btn-collapse {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+body.dark .finding-body {{ background: #161b22 !important; }}
+body.dark .rem-block {{ background: #0d1117; border-color: #30363d; }}
+body.dark .atag {{ background: #21262d; color: #c9d1d9; }}
+body.dark .finding-title, body.dark .section-header h2 {{ color: #e6edf3; }}
+body.dark .finding-desc, body.dark .rem-text {{ color: #8b949e; }}
+body.dark .stat-lbl, body.dark .meta-k, body.dark .finding-foot {{ color: #484f58; }}
+body.dark .footer {{ border-color: #21262d; color: #484f58; }}
+body.dark code {{ background: #21262d; color: #c9d1d9; }}
+.dark-toggle {{
+  padding: 6px 12px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; cursor: pointer; font-size: 14px; font-family: inherit;
+}}
+body.dark .dark-toggle {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+.clipboard-btn {{
+  padding: 6px 14px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; cursor: pointer; font-size: 11px; font-weight: 600;
+  font-family: inherit; color: {CS_DARK};
+}}
+body.dark .clipboard-btn {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+.clipboard-btn.copied {{ background: #1a7a3f; color: white; border-color: #1a7a3f; }}
+
+/* ── Permalink anchors ── */
+.permalink {{
+  color: #8a99b0; text-decoration: none; font-size: 11px; margin-left: 8px; opacity: 0;
+  transition: opacity 0.15s;
+}}
+.finding-card:hover .permalink {{ opacity: 1; }}
+
+/* ── Print styles ── */
+@media print {{
+  .toolbar, .dark-toggle, .clipboard-btn {{ display: none; }}
+  .finding-card.collapsed .finding-body {{ max-height: none !important; padding: 14px 18px 12px; opacity: 1; }}
+  .stat-card {{ cursor: default; }}
+  body.dark {{ background: white; color: #0a1628; }}
+  body.dark .stat-card, body.dark .risk-box, body.dark .meta-box,
+  body.dark .finding-card {{ background: white; box-shadow: none; border: 1px solid #ddd; }}
+}}
+
 @media (max-width:900px) {{
   .stats-row {{ grid-template-columns: repeat(3,1fr); }}
   .meta-row  {{ grid-template-columns: repeat(2,1fr); }}
   .header-inner {{ flex-direction: column; align-items: flex-start; }}
+  .toolbar {{ flex-direction: column; }}
+  .search-box {{ min-width: 100%; }}
 }}"""
+
+        js = """
+/* ── Interactive Report Logic ── */
+var activeSev = null;
+var activeCategory = 'ALL';
+var activeNewFilter = 'ALL';
+var searchQuery = '';
+var allCollapsed = false;
+
+function toggleCard(card) {
+  card.classList.toggle('collapsed');
+}
+
+function toggleSevFilter(sev) {
+  var cards = document.querySelectorAll('.stat-card');
+  if (activeSev === sev) {
+    activeSev = null;
+    cards.forEach(function(c) { c.classList.remove('active','dimmed'); });
+  } else {
+    activeSev = sev;
+    cards.forEach(function(c) {
+      if (c.getAttribute('data-sev-filter') === sev) {
+        c.classList.add('active');
+        c.classList.remove('dimmed');
+      } else {
+        c.classList.remove('active');
+        c.classList.add('dimmed');
+      }
+    });
+  }
+  applyFilters();
+}
+
+function applyFilters() {
+  var cards = document.querySelectorAll('.finding-card');
+  var visible = 0;
+  cards.forEach(function(card) {
+    var show = true;
+    if (activeSev && card.getAttribute('data-severity') !== activeSev) show = false;
+    if (activeCategory !== 'ALL' && card.getAttribute('data-category') !== activeCategory) show = false;
+    if (activeNewFilter !== 'ALL' && card.getAttribute('data-newstatus') !== activeNewFilter) show = false;
+    if (searchQuery) {
+      var text = card.textContent.toLowerCase();
+      if (text.indexOf(searchQuery) === -1) show = false;
+    }
+    if (show) {
+      card.classList.remove('hidden');
+      visible++;
+    } else {
+      card.classList.add('hidden');
+    }
+  });
+  var counter = document.getElementById('filter-count');
+  var total = cards.length;
+  if (counter) {
+    if (activeSev || activeCategory !== 'ALL' || activeNewFilter !== 'ALL' || searchQuery) {
+      counter.textContent = 'Showing ' + visible + ' of ' + total + ' findings';
+    } else {
+      counter.textContent = '';
+    }
+  }
+}
+
+function onSearchInput(e) {
+  searchQuery = e.target.value.toLowerCase().trim();
+  applyFilters();
+}
+
+function onCategoryChange(e) {
+  activeCategory = e.target.value;
+  applyFilters();
+}
+
+function onNewFilterChange(e) {
+  activeNewFilter = e.target.value;
+  applyFilters();
+}
+
+function resetFilters() {
+  activeSev = null;
+  activeCategory = 'ALL';
+  activeNewFilter = 'ALL';
+  searchQuery = '';
+  document.getElementById('search-input').value = '';
+  document.getElementById('cat-filter').value = 'ALL';
+  document.getElementById('new-filter').value = 'ALL';
+  document.querySelectorAll('.stat-card').forEach(function(c) {
+    c.classList.remove('active','dimmed');
+  });
+  applyFilters();
+}
+
+function toggleAllCards() {
+  allCollapsed = !allCollapsed;
+  var cards = document.querySelectorAll('.finding-card');
+  cards.forEach(function(card) {
+    if (allCollapsed) {
+      card.classList.add('collapsed');
+    } else {
+      card.classList.remove('collapsed');
+    }
+  });
+  var btn = document.getElementById('btn-toggle');
+  if (btn) btn.textContent = allCollapsed ? 'Expand All' : 'Collapse All';
+}
+
+function toggleDarkMode() {
+  document.body.classList.toggle('dark');
+  var btn = document.getElementById('dark-toggle');
+  if (btn) btn.textContent = document.body.classList.contains('dark') ? '☀' : '🌙';
+  try { localStorage.setItem('adpulse-dark', document.body.classList.contains('dark') ? '1' : '0'); } catch(e) {}
+}
+
+function copyToClipboard() {
+  var cards = document.querySelectorAll('.finding-card:not(.hidden)');
+  var lines = ['ADPulse Security Findings Summary', ''];
+  cards.forEach(function(card) {
+    var sev = card.getAttribute('data-severity');
+    var title = card.querySelector('.finding-title');
+    if (title) {
+      lines.push('[' + sev + '] ' + title.textContent);
+      var affected = card.querySelector('.affected-block strong');
+      if (affected) lines.push('  ' + affected.textContent);
+    }
+  });
+  lines.push('');
+  lines.push('Copied from ADPulse HTML Report');
+  var text = lines.join('\\n');
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.getElementById('clipboard-btn');
+    if (btn) { btn.classList.add('copied'); btn.textContent = 'Copied!'; }
+    setTimeout(function() {
+      if (btn) { btn.classList.remove('copied'); btn.textContent = 'Copy Summary'; }
+    }, 2000);
+  });
+}
+
+// Restore dark mode preference
+try {
+  if (localStorage.getItem('adpulse-dark') === '1') {
+    document.body.classList.add('dark');
+    var btn = document.getElementById('dark-toggle');
+    if (btn) btn.textContent = '☀';
+  }
+} catch(e) {}
+
+// Handle permalink hash on load
+if (window.location.hash) {
+  var target = document.getElementById(window.location.hash.slice(1));
+  if (target) {
+    target.classList.remove('collapsed');
+    setTimeout(function() { target.scrollIntoView({behavior: 'smooth', block: 'center'}); }, 100);
+  }
+}
+"""
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -347,6 +642,21 @@ code {{
     {"<span class='new-info'>&#9888; " + str(new_count) + " new since last scan</span>" if new_count else ""}
   </div>
 
+  <div class="toolbar">
+    <input type="text" id="search-input" class="search-box" placeholder="Search findings (title, description, affected objects...)" oninput="onSearchInput(event)">
+    <select id="cat-filter" class="filter-select" onchange="onCategoryChange(event)">{cat_options}</select>
+    <select id="new-filter" class="filter-select" onchange="onNewFilterChange(event)">
+      <option value="ALL">All Status</option>
+      <option value="new">New Only</option>
+      <option value="recurring">Recurring Only</option>
+    </select>
+    <button class="btn-collapse" id="btn-toggle" onclick="toggleAllCards()">Collapse All</button>
+    <button class="btn-reset" onclick="resetFilters()">Reset Filters</button>
+    <button class="clipboard-btn" id="clipboard-btn" onclick="copyToClipboard()">Copy Summary</button>
+    <button class="dark-toggle" id="dark-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">&#127769;</button>
+    <span class="filter-count" id="filter-count"></span>
+  </div>
+
   {findings_html if findings else "<div class='no-findings'><div style='font-size:48px;margin-bottom:12px;'>&#9989;</div><strong>No findings detected.</strong><br>Your environment looks clean.</div>"}
 
 </div>
@@ -357,6 +667,7 @@ code {{
   <em>This report is confidential. Do not distribute outside your organisation.</em>
 </div>
 
+<script>{js}</script>
 </body>
 </html>"""
 
@@ -649,6 +960,279 @@ class PDFReportGenerator:
 
 
 # =============================================================================
+#  Trend Dashboard
+# =============================================================================
+
+class TrendDashboardGenerator:
+    """Generates an interactive HTML trend dashboard from historical scan data."""
+
+    def generate(self, trend_data, output_path, company_name="Your Organisation"):
+        html = self._build(trend_data, company_name)
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
+        logger.info(f"Trend dashboard -> {output_path}")
+        return str(path)
+
+    def _build(self, trend_data, company_name):
+        now = datetime.now().strftime("%d %B %Y, %H:%M")
+
+        # Prepare chart data
+        labels = []
+        risk_scores = []
+        critical_counts = []
+        high_counts = []
+        medium_counts = []
+        total_counts = []
+
+        for t in trend_data:
+            date = (t.get("finished_at") or "")[:10]
+            labels.append(date)
+            risk_scores.append(t.get("risk_score", 0))
+            sc = t.get("severity_counts", {})
+            critical_counts.append(sc.get("CRITICAL", 0))
+            high_counts.append(sc.get("HIGH", 0))
+            medium_counts.append(sc.get("MEDIUM", 0))
+            total_counts.append(t.get("findings_count", 0))
+
+        chart_data = {
+            "labels": labels,
+            "risk_scores": risk_scores,
+            "critical": critical_counts,
+            "high": high_counts,
+            "medium": medium_counts,
+            "total": total_counts,
+        }
+
+        import json
+        chart_json = json.dumps(chart_data)
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADPulse Trend Dashboard - {company_name}</title>
+<style>
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f0f4f8; color: #0a1628; min-height: 100vh;
+}}
+.header {{
+  background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 60%, #0053A4 100%);
+  padding: 24px 40px; color: white;
+}}
+.header h1 {{ font-size: 22px; font-weight: 700; }}
+.header p {{ font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 4px; }}
+.bar {{ height: 4px; background: linear-gradient(90deg, #FF8800 0%, #0053A4 100%); }}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 28px 40px; }}
+.card {{
+  background: white; border-radius: 10px; padding: 24px;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07); margin-bottom: 20px;
+}}
+.card h2 {{ font-size: 15px; font-weight: 700; margin-bottom: 16px; color: #0a1628; }}
+canvas {{ width: 100% !important; height: 300px !important; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
+.summary-cards {{
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px;
+}}
+.s-card {{
+  background: white; border-radius: 10px; padding: 16px; text-align: center;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.s-card .num {{ font-size: 32px; font-weight: 800; line-height: 1; }}
+.s-card .lbl {{ font-size: 10px; color: #8a99b0; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }}
+.trend-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+.trend-table th {{ background: #f0f4f8; padding: 8px 12px; text-align: left; font-weight: 700; color: #4a5a6e; }}
+.trend-table td {{ padding: 8px 12px; border-bottom: 1px solid #eef2f7; }}
+.trend-table tr:hover {{ background: #f8fafc; }}
+@media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} .summary-cards {{ grid-template-columns: repeat(2,1fr); }} }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>ADPulse Trend Dashboard</h1>
+  <p>{company_name} | Generated: {now} | {len(trend_data)} scans</p>
+</div>
+<div class="bar"></div>
+<div class="container">
+
+  <div class="summary-cards">
+    <div class="s-card">
+      <div class="num" style="color:#0053A4;">{len(trend_data)}</div>
+      <div class="lbl">Total Scans</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:{SEVERITY_HEX.get('CRITICAL','#c0152a')};">{risk_scores[-1] if risk_scores else 0}</div>
+      <div class="lbl">Latest Risk Score</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:#1a7a3f;">{"+" if len(risk_scores)>=2 and risk_scores[-1] <= risk_scores[-2] else ""}{risk_scores[-1] - risk_scores[-2] if len(risk_scores)>=2 else 0}</div>
+      <div class="lbl">Score Change</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:#0053A4;">{total_counts[-1] if total_counts else 0}</div>
+      <div class="lbl">Latest Findings</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Risk Score Trend</h2>
+      <canvas id="riskChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>Findings by Severity</h2>
+      <canvas id="sevChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Scan History</h2>
+    <table class="trend-table">
+      <thead><tr><th>Date</th><th>Risk Score</th><th>Critical</th><th>High</th><th>Medium</th><th>Total</th></tr></thead>
+      <tbody id="histTable"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+var D = {chart_json};
+
+// Simple canvas chart renderer (no external dependencies)
+function drawLineChart(canvasId, labels, datasets) {{
+  var c = document.getElementById(canvasId);
+  var ctx = c.getContext('2d');
+  var w = c.width = c.offsetWidth;
+  var h = c.height = c.offsetHeight;
+  var pad = {{top: 20, right: 20, bottom: 40, left: 50}};
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  var allVals = [];
+  datasets.forEach(function(ds) {{ allVals = allVals.concat(ds.data); }});
+  var maxVal = Math.max.apply(null, allVals) || 100;
+  maxVal = Math.ceil(maxVal / 10) * 10 || 10;
+
+  // Grid
+  ctx.strokeStyle = '#e8eef5';
+  ctx.lineWidth = 1;
+  for (var i = 0; i <= 5; i++) {{
+    var y = pad.top + ch - (ch * i / 5);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal * i / 5), pad.left - 8, y + 4);
+  }}
+
+  // X labels
+  ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  var step = Math.max(1, Math.floor(labels.length / 8));
+  for (var i = 0; i < labels.length; i += step) {{
+    var x = pad.left + (cw * i / (labels.length - 1 || 1));
+    ctx.fillText(labels[i], x, h - pad.bottom + 18);
+  }}
+
+  // Lines
+  datasets.forEach(function(ds) {{
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (var i = 0; i < ds.data.length; i++) {{
+      var x = pad.left + (cw * i / (ds.data.length - 1 || 1));
+      var y = pad.top + ch - (ch * ds.data[i] / maxVal);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }}
+    ctx.stroke();
+    // Dots
+    for (var i = 0; i < ds.data.length; i++) {{
+      var x = pad.left + (cw * i / (ds.data.length - 1 || 1));
+      var y = pad.top + ch - (ch * ds.data[i] / maxVal);
+      ctx.fillStyle = ds.color;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+    }}
+  }});
+}}
+
+function drawBarChart(canvasId, labels, datasets) {{
+  var c = document.getElementById(canvasId);
+  var ctx = c.getContext('2d');
+  var w = c.width = c.offsetWidth;
+  var h = c.height = c.offsetHeight;
+  var pad = {{top: 20, right: 20, bottom: 40, left: 50}};
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  var maxVal = 0;
+  for (var i = 0; i < labels.length; i++) {{
+    var sum = 0;
+    datasets.forEach(function(ds) {{ sum += ds.data[i] || 0; }});
+    if (sum > maxVal) maxVal = sum;
+  }}
+  maxVal = Math.ceil(maxVal / 5) * 5 || 10;
+
+  // Grid
+  ctx.strokeStyle = '#e8eef5'; ctx.lineWidth = 1;
+  for (var i = 0; i <= 5; i++) {{
+    var y = pad.top + ch - (ch * i / 5);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal * i / 5), pad.left - 8, y + 4);
+  }}
+
+  var barW = (cw / labels.length) * 0.6;
+  var gap = (cw / labels.length) * 0.4;
+
+  for (var i = 0; i < labels.length; i++) {{
+    var x = pad.left + (cw * i / labels.length) + gap / 2;
+    var yOffset = 0;
+    datasets.forEach(function(ds) {{
+      var val = ds.data[i] || 0;
+      var barH = (ch * val / maxVal);
+      var y = pad.top + ch - yOffset - barH;
+      ctx.fillStyle = ds.color;
+      ctx.fillRect(x, y, barW, barH);
+      yOffset += barH;
+    }});
+    // X label
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    if (i % Math.max(1, Math.floor(labels.length / 8)) === 0) {{
+      ctx.fillText(labels[i], x + barW / 2, h - pad.bottom + 18);
+    }}
+  }}
+}}
+
+// Render charts
+window.addEventListener('load', function() {{
+  drawLineChart('riskChart', D.labels, [
+    {{data: D.risk_scores, color: '#0053A4'}}
+  ]);
+  drawBarChart('sevChart', D.labels, [
+    {{data: D.critical, color: '#c0152a'}},
+    {{data: D.high, color: '#d9500a'}},
+    {{data: D.medium, color: '#b07d00'}}
+  ]);
+
+  // Table
+  var tbody = document.getElementById('histTable');
+  for (var i = D.labels.length - 1; i >= 0; i--) {{
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + D.labels[i] + '</td>' +
+      '<td><strong>' + D.risk_scores[i] + '/100</strong></td>' +
+      '<td style="color:#c0152a;font-weight:700;">' + D.critical[i] + '</td>' +
+      '<td style="color:#d9500a;font-weight:700;">' + D.high[i] + '</td>' +
+      '<td style="color:#b07d00;font-weight:700;">' + D.medium[i] + '</td>' +
+      '<td>' + D.total[i] + '</td>';
+    tbody.appendChild(tr);
+  }}
+}});
+</script>
+</body>
+</html>"""
+
+
+# =============================================================================
 #  Report Manager
 # =============================================================================
 
@@ -659,9 +1243,10 @@ class ReportManager:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.gen_pdf      = config.get("generate_pdf",  "true").lower() == "true"
         self.gen_html     = config.get("generate_html", "true").lower() == "true"
+        self.gen_trend    = config.get("generate_trend_dashboard", "false").lower() == "true"
         self.company_name = config.get("company_name", "Your Organisation")
 
-    def generate_all(self, findings, run_id, domain_info=None):
+    def generate_all(self, findings, run_id, domain_info=None, baseline=None):
         ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
         paths = {}
 
@@ -680,5 +1265,15 @@ class ReportManager:
                     findings, run_id, p, self.company_name, domain_info)
             except Exception as e:
                 logger.error(f"PDF generation failed: {e}")
+
+        if self.gen_trend and baseline:
+            p = str(self.output_dir / f"ADPulse_Trends_{ts}.html")
+            try:
+                trend_data = baseline.get_trend_data(limit=30)
+                if trend_data:
+                    paths["trend"] = TrendDashboardGenerator().generate(
+                        trend_data, p, self.company_name)
+            except Exception as e:
+                logger.error(f"Trend dashboard generation failed: {e}")
 
         return paths

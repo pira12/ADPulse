@@ -372,3 +372,108 @@ class BaselineEngine:
                 (limit * 10,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------ #
+    #  Finding Diff (between last two scans)                               #
+    # ------------------------------------------------------------------ #
+
+    def get_finding_diff(self) -> Optional[dict]:
+        """
+        Compare findings between the last two successful scans.
+        Returns: {current_run, previous_run, new: [...], resolved: [...], persistent: [...]}
+        """
+        with self._conn() as conn:
+            runs = conn.execute(
+                "SELECT run_id FROM snapshots WHERE status='completed' ORDER BY finished_at DESC LIMIT 2"
+            ).fetchall()
+
+        if len(runs) < 2:
+            return None
+
+        current_run = runs[0]["run_id"]
+        previous_run = runs[1]["run_id"]
+
+        current_findings = {f["finding_id"]: f for f in self.get_findings_for_run(current_run)}
+        previous_findings = {f["finding_id"]: f for f in self.get_findings_for_run(previous_run)}
+
+        current_ids = set(current_findings.keys())
+        previous_ids = set(previous_findings.keys())
+
+        new_ids = current_ids - previous_ids
+        resolved_ids = previous_ids - current_ids
+        persistent_ids = current_ids & previous_ids
+
+        return {
+            "current_run": current_run,
+            "previous_run": previous_run,
+            "new": [current_findings[fid] for fid in new_ids],
+            "resolved": [previous_findings[fid] for fid in resolved_ids],
+            "persistent": [current_findings[fid] for fid in persistent_ids],
+        }
+
+    # ------------------------------------------------------------------ #
+    #  Trend Data (for dashboard)                                          #
+    # ------------------------------------------------------------------ #
+
+    def get_trend_data(self, limit: int = 30) -> list:
+        """
+        Get risk score trend data for the last N scans.
+        Returns list of {run_id, finished_at, findings_count, severity_counts}.
+        """
+        with self._conn() as conn:
+            runs = conn.execute(
+                "SELECT run_id, finished_at, findings_count FROM snapshots "
+                "WHERE status='completed' ORDER BY finished_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+        trend = []
+        for run in reversed(runs):  # oldest first for charting
+            rid = run["run_id"]
+            findings = self.get_findings_for_run(rid)
+            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+            for f in findings:
+                sev = f.get("severity", "INFO")
+                counts[sev] = counts.get(sev, 0) + 1
+            risk_score = min(
+                counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
+                counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
+            )
+            trend.append({
+                "run_id": rid,
+                "finished_at": run["finished_at"],
+                "findings_count": run["findings_count"] or 0,
+                "severity_counts": counts,
+                "risk_score": risk_score,
+            })
+        return trend
+
+    # ------------------------------------------------------------------ #
+    #  Database Retention / Cleanup                                        #
+    # ------------------------------------------------------------------ #
+
+    def cleanup_old_scans(self, retention_days: int):
+        """Delete scan data older than retention_days."""
+        from datetime import timedelta
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=retention_days)).isoformat()
+
+        with self._conn() as conn:
+            # Get old run IDs
+            old_runs = conn.execute(
+                "SELECT run_id FROM snapshots WHERE finished_at < ? AND finished_at IS NOT NULL",
+                (cutoff,),
+            ).fetchall()
+
+            if not old_runs:
+                return
+
+            old_ids = [r["run_id"] for r in old_runs]
+            placeholders = ",".join("?" for _ in old_ids)
+
+            conn.execute(f"DELETE FROM user_objects WHERE run_id IN ({placeholders})", old_ids)
+            conn.execute(f"DELETE FROM group_members WHERE run_id IN ({placeholders})", old_ids)
+            conn.execute(f"DELETE FROM computer_objects WHERE run_id IN ({placeholders})", old_ids)
+            conn.execute(f"DELETE FROM findings_history WHERE run_id IN ({placeholders})", old_ids)
+            conn.execute(f"DELETE FROM snapshots WHERE run_id IN ({placeholders})", old_ids)
+
+        logger.info(f"Cleaned up {len(old_ids)} scan(s) older than {retention_days} days.")

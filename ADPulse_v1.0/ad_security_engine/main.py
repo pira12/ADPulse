@@ -1,7 +1,7 @@
 """
 main.py
 -------
-AD Security Continuous Assessment Engine
+ADPulse - AD Security Continuous Assessment Engine
 Entry point. Orchestrates collection, detection, baselining, and reporting.
 
 Usage:
@@ -9,6 +9,7 @@ Usage:
     python main.py --config /path.ini  # Use a specific config file
     python main.py --test-connection   # Test LDAP connectivity only
     python main.py --report-only       # Generate report from last scan (no new scan)
+    python main.py --diff              # Show what changed between last two scans
     python main.py --daemon            # Run continuously on a schedule
 
 Requires only a standard domain user account. NO admin privileges needed.
@@ -16,6 +17,7 @@ Requires only a standard domain user account. NO admin privileges needed.
 
 import argparse
 import configparser
+import json
 import logging
 import logging.handlers
 import sys
@@ -65,10 +67,23 @@ logger = logging.getLogger("main")
 
 def load_config(config_path: str) -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
-    if not Path(config_path).exists():
+    config_file = Path(config_path)
+    if not config_file.exists():
         print(f"ERROR: Config file not found: {config_path}")
         print("Copy config.ini.example to config.ini and fill in your settings.")
         sys.exit(1)
+
+    # Warn if config file is world-readable (contains credentials)
+    try:
+        import stat
+        mode = config_file.stat().st_mode
+        if mode & stat.S_IROTH:
+            print(f"WARNING: {config_path} is world-readable. This file contains credentials.")
+            print("         Fix with: chmod 600 " + config_path)
+            print()
+    except (OSError, AttributeError):
+        pass  # Skip on Windows or if stat fails
+
     cfg.read(config_path)
     return cfg
 
@@ -77,9 +92,84 @@ def load_config(config_path: str) -> configparser.ConfigParser:
 #  Core Scan Function
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _load_exclusions(cfg: configparser.ConfigParser) -> dict:
+    """Load finding exclusions and severity overrides from config."""
+    exclusions = {
+        "finding_ids": set(),
+        "accounts": set(),
+        "reason": "",
+    }
+    if cfg.has_section("exclusions"):
+        exc = cfg["exclusions"]
+        exclusions["finding_ids"] = {
+            fid.strip() for fid in exc.get("finding_ids", "").split(",") if fid.strip()
+        }
+        exclusions["accounts"] = {
+            a.strip().lower() for a in exc.get("accounts", "").split(",") if a.strip()
+        }
+        exclusions["reason"] = exc.get("reason", "")
+
+    overrides = {}
+    if cfg.has_section("severity_overrides"):
+        for fid, sev in cfg["severity_overrides"].items():
+            overrides[fid.strip().upper()] = sev.strip().upper()
+
+    return {"exclusions": exclusions, "overrides": overrides}
+
+
+def _apply_exclusions(findings: list, exclusion_cfg: dict) -> list:
+    """Filter findings based on exclusion rules and apply severity overrides."""
+    exc = exclusion_cfg["exclusions"]
+    overrides = exclusion_cfg["overrides"]
+    excluded_ids = exc["finding_ids"]
+    excluded_accounts = exc["accounts"]
+
+    filtered = []
+    for f in findings:
+        fid = f.get("finding_id", "")
+        # Skip excluded finding IDs
+        if fid in excluded_ids:
+            logger.debug(f"Excluding finding {fid} (exclusion list)")
+            continue
+
+        # Remove excluded accounts from affected lists
+        if excluded_accounts and f.get("affected"):
+            f["affected"] = [
+                a for a in f["affected"]
+                if not any(exc_acct in str(a).lower() for exc_acct in excluded_accounts)
+            ]
+            # If all affected objects were excluded, skip the finding
+            if not f["affected"]:
+                logger.debug(f"Excluding finding {fid} (all affected objects excluded)")
+                continue
+
+        # Apply severity overrides
+        if fid in overrides:
+            old_sev = f["severity"]
+            f["severity"] = overrides[fid]
+            logger.debug(f"Severity override: {fid} {old_sev} -> {f['severity']}")
+
+        filtered.append(f)
+
+    if len(filtered) < len(findings):
+        logger.info(f"Exclusions applied: {len(findings) - len(filtered)} finding(s) excluded.")
+
+    return filtered
+
+
+def _get_ldap_configs(cfg: configparser.ConfigParser) -> list:
+    """Get all LDAP configurations (primary + additional domains)."""
+    configs = [dict(cfg["ldap"])]
+    # Check for additional domains: [ldap.2], [ldap.3], etc.
+    for section in cfg.sections():
+        if section.startswith("ldap.") and section != "ldap":
+            configs.append(dict(cfg[section]))
+    return configs
+
+
 def run_scan(cfg: configparser.ConfigParser) -> dict:
     """
-    Execute a complete AD security scan.
+    Execute a complete AD security scan (supports multi-domain).
     Returns a dict with run_id, findings, report_paths, and stats.
     """
     from modules.ldap_collector import LDAPCollector
@@ -96,93 +186,150 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
     logger.info("=" * 70)
 
     # Initialise subsystems
-    ldap_cfg      = dict(cfg["ldap"])
     scanning_cfg  = dict(cfg["scanning"])
     reporting_cfg = dict(cfg["reporting"])
-    
+    output_cfg    = dict(cfg["output"]) if cfg.has_section("output") else {}
     db_path       = cfg["database"].get("db_path", "./ad_baseline.db")
 
     baseline  = BaselineEngine(db_path)
     detector  = DetectionEngine(scanning_cfg)
     reporter  = ReportManager(reporting_cfg)
-    notifier  = OutputNotifier(reporting_cfg)
+    notifier  = OutputNotifier(reporting_cfg, output_cfg)
+
+    # Load exclusions and severity overrides
+    exclusion_cfg = _load_exclusions(cfg)
+
+    # DB retention cleanup
+    retention_days = int(cfg["database"].get("retention_days", 0))
+    if retention_days > 0:
+        baseline.cleanup_old_scans(retention_days)
 
     # Record scan start
     baseline.start_scan(run_id)
 
-    # ── Step 1: Connect to AD ────────────────────────────────────────────
-    logger.info("Step 1/6: Connecting to Active Directory...")
-    collector = LDAPCollector(ldap_cfg)
-    if not collector.connect():
-        error_msg = "Failed to connect to Active Directory. Check your credentials and server settings."
-        logger.error(error_msg)
-        baseline.fail_scan(run_id, error_msg)
-        return {"success": False, "error": error_msg, "run_id": run_id}
+    # Get all LDAP configs (multi-domain support)
+    ldap_configs = _get_ldap_configs(cfg)
+    all_ad_data = []
+
+    privileged_groups = [
+        g.strip() for g in scanning_cfg.get(
+            "privileged_groups",
+            "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
+        ).split(",")
+    ]
+
+    for i, ldap_cfg in enumerate(ldap_configs):
+        domain_label = ldap_cfg.get("domain", f"domain-{i+1}")
+
+        # ── Step 1: Connect to AD ────────────────────────────────────────
+        logger.info(f"Step 1/6: Connecting to Active Directory ({domain_label})...")
+        collector = LDAPCollector(ldap_cfg)
+        if not collector.connect():
+            error_msg = f"Failed to connect to {domain_label}. Check credentials and server settings."
+            logger.error(error_msg)
+            if i == 0:  # Fail on primary domain
+                baseline.fail_scan(run_id, error_msg)
+                return {"success": False, "error": error_msg, "run_id": run_id}
+            else:
+                logger.warning(f"Skipping additional domain {domain_label}")
+                continue
+
+        try:
+            # ── Step 2: Collect AD Data ──────────────────────────────────
+            logger.info(f"Step 2/6: Collecting AD data from {domain_label}...")
+
+            ad_data = {
+                "users":                 collector.get_all_users(),
+                "kerberoastable":        collector.get_kerberoastable_accounts(),
+                "asreproastable":        collector.get_asreproastable_accounts(),
+                "pwd_never_expires":     collector.get_accounts_password_never_expires(),
+                "admincount_users":      collector.get_admincount_accounts(),
+                "privileged_members":    collector.get_privileged_group_members(privileged_groups),
+                "computers":             collector.get_all_computers(),
+                "domain_controllers":    collector.get_domain_controllers(),
+                "unconstrained_delegation": collector.get_unconstrained_delegation_accounts(),
+                "constrained_delegation":   collector.get_constrained_delegation_accounts(),
+                "password_policy":       collector.get_password_policy(),
+                "gpo_links":             collector.get_gpo_links(),
+                "fine_grained_policies": collector.get_fine_grained_password_policies(),
+                "domain_info":           collector.get_domain_info(),
+                "pwd_not_required":      collector.get_password_not_required_accounts(),
+                "reversible_encryption": collector.get_reversible_encryption_accounts(),
+                "sid_history":           collector.get_accounts_with_sid_history(),
+                "protected_users":       collector.get_protected_users_members(),
+                "description_passwords": collector.get_users_with_description_passwords(),
+                "computers_without_laps": collector.get_computers_without_laps(),
+                "krbtgt":                collector.get_krbtgt_account(),
+                "trusts":                collector.get_trust_relationships(),
+                "tombstone_lifetime":    collector.get_tombstone_lifetime(),
+                "dns_zones":             collector.get_dns_zones(),
+                "des_only_accounts":     collector.get_des_only_accounts(),
+                "expiring_accounts":     collector.get_expiring_accounts(
+                    days_ahead=int(scanning_cfg.get("expiring_account_days", 30))
+                ),
+                "_domain_label":         domain_label,
+            }
+
+            logger.info(
+                f"  → Users: {len(ad_data['users'])} | "
+                f"Computers: {len(ad_data['computers'])} | "
+                f"DCs: {len(ad_data['domain_controllers'])} | "
+                f"Kerberoastable: {len(ad_data['kerberoastable'])} | "
+                f"AS-REP: {len(ad_data['asreproastable'])}"
+            )
+            all_ad_data.append(ad_data)
+
+        except Exception as e:
+            logger.exception(f"Error collecting data from {domain_label}: {e}")
+        finally:
+            collector.disconnect()
+
+    if not all_ad_data:
+        baseline.fail_scan(run_id, "No AD data collected from any domain.")
+        return {"success": False, "error": "No data collected", "run_id": run_id}
 
     try:
-        # ── Step 2: Collect AD Data ──────────────────────────────────────
-        logger.info("Step 2/6: Collecting AD data (this may take a moment)...")
-
-        privileged_groups = [
-            g.strip() for g in scanning_cfg.get(
-                "privileged_groups",
-                "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
-            ).split(",")
-        ]
-
-        ad_data = {
-            "users":                 collector.get_all_users(),
-            "kerberoastable":        collector.get_kerberoastable_accounts(),
-            "asreproastable":        collector.get_asreproastable_accounts(),
-            "pwd_never_expires":     collector.get_accounts_password_never_expires(),
-            "admincount_users":      collector.get_admincount_accounts(),
-            "privileged_members":    collector.get_privileged_group_members(privileged_groups),
-            "computers":             collector.get_all_computers(),
-            "domain_controllers":    collector.get_domain_controllers(),
-            "unconstrained_delegation": collector.get_unconstrained_delegation_accounts(),
-            "constrained_delegation":   collector.get_constrained_delegation_accounts(),
-            "password_policy":       collector.get_password_policy(),
-            "gpo_links":             collector.get_gpo_links(),
-            "fine_grained_policies": collector.get_fine_grained_password_policies(),
-            "domain_info":           collector.get_domain_info(),
-        }
-
-        logger.info(
-            f"  → Users: {len(ad_data['users'])} | "
-            f"Computers: {len(ad_data['computers'])} | "
-            f"DCs: {len(ad_data['domain_controllers'])} | "
-            f"Kerberoastable: {len(ad_data['kerberoastable'])} | "
-            f"AS-REP: {len(ad_data['asreproastable'])}"
-        )
+        # Use primary domain data for baseline/reports; merge findings from all
+        primary = all_ad_data[0]
 
         # ── Step 3: Store Baseline ───────────────────────────────────────
         logger.info("Step 3/6: Updating baseline database...")
         previous_run_id = baseline.get_last_successful_run_id()
 
-        baseline.save_users(run_id, ad_data["users"])
-        baseline.save_group_members(run_id, ad_data["privileged_members"])
+        baseline.save_users(run_id, primary["users"])
+        baseline.save_group_members(run_id, primary["privileged_members"])
 
         if previous_run_id:
             logger.info(f"  → Previous scan found: {previous_run_id[:16]}... (delta detection enabled)")
         else:
-            logger.info("  → No previous baseline. This is the first scan — delta detections will run next time.")
+            logger.info("  → No previous baseline. First scan — delta detections next time.")
 
         # ── Step 4: Run Detections ───────────────────────────────────────
         logger.info("Step 4/6: Running security detections...")
-        findings = detector.run_all_detections(
-            ad_data=ad_data,
-            baseline=baseline if previous_run_id else None,
-            previous_run_id=previous_run_id,
-        )
+        all_findings = []
+        for ad_data in all_ad_data:
+            domain_findings = detector.run_all_detections(
+                ad_data=ad_data,
+                baseline=baseline if previous_run_id else None,
+                previous_run_id=previous_run_id,
+            )
+            # Tag findings with domain for multi-domain
+            if len(all_ad_data) > 1:
+                domain_label = ad_data.get("_domain_label", "")
+                for f in domain_findings:
+                    f["finding_id"] = f"{f['finding_id']}@{domain_label}"
+                    f["title"] = f"[{domain_label}] {f['title']}"
+            all_findings.extend(domain_findings)
 
-        # Attach first_seen/is_new fields for report (will be overwritten by DB save)
-        for f in findings:
+        # Apply exclusions and severity overrides
+        all_findings = _apply_exclusions(all_findings, exclusion_cfg)
+
+        # Attach first_seen/is_new fields
+        for f in all_findings:
             f.setdefault("first_seen", datetime.now(tz=timezone.utc).isoformat())
             f.setdefault("is_new", 1)
 
-        baseline.save_findings(run_id, findings)
-
-        # Reload from DB to get first_seen / is_new correctly
+        baseline.save_findings(run_id, all_findings)
         findings = baseline.get_findings_for_run(run_id)
 
         # Log severity breakdown
@@ -201,17 +348,20 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         report_paths = reporter.generate_all(
             findings=findings,
             run_id=run_id,
-            domain_info=ad_data.get("domain_info"),
+            domain_info=primary.get("domain_info"),
+            baseline=baseline,
         )
         for fmt, path in report_paths.items():
             logger.info(f"  → {fmt.upper()} report: {path}")
 
-        # ── Step 6: Send Alerts ──────────────────────────────────────────
+        # ── Step 6: Output Summary & Notifications ────────────────────────
         logger.info("Step 6/6: Generating output summary...")
-        pdf_path = report_paths.get("pdf")
-        alert_sent = alerter.send_alert(findings, run_id, pdf_path)
-        if not alert_sent and cfg["alerting"].get("email_enabled", "false") == "true":
-            logger.info("  → No alert sent (no findings met the severity threshold).")
+        notifier.notify(
+            findings=findings,
+            run_id=run_id,
+            report_paths=report_paths,
+            domain_info=primary.get("domain_info"),
+        )
 
         # Finalise
         elapsed = (datetime.now(tz=timezone.utc) - started_at).total_seconds()
@@ -235,9 +385,6 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         logger.exception(f"Unexpected error during scan: {e}")
         baseline.fail_scan(run_id, str(e))
         return {"success": False, "error": str(e), "run_id": run_id}
-
-    finally:
-        collector.disconnect()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,6 +445,43 @@ def cmd_show_history(cfg: configparser.ConfigParser):
     print()
 
 
+def cmd_diff(cfg: configparser.ConfigParser):
+    """Show what changed between the last two scans."""
+    from modules.baseline_engine import BaselineEngine
+    db_path = cfg["database"].get("db_path", "./ad_baseline.db")
+    baseline = BaselineEngine(db_path)
+    diff = baseline.get_finding_diff()
+
+    if not diff:
+        print("\n  Need at least 2 completed scans to show a diff.")
+        return
+
+    print(f"\n  Finding Diff: {diff['current_run'][:16]}... vs {diff['previous_run'][:16]}...")
+    print(f"  {'='*60}")
+
+    if diff["new"]:
+        print(f"\n  NEW FINDINGS ({len(diff['new'])})")
+        print(f"  {'-'*40}")
+        for f in diff["new"]:
+            print(f"  [+] [{f['severity']}] {f['title']}")
+
+    if diff["resolved"]:
+        print(f"\n  RESOLVED FINDINGS ({len(diff['resolved'])})")
+        print(f"  {'-'*40}")
+        for f in diff["resolved"]:
+            print(f"  [-] [{f['severity']}] {f['title']}")
+
+    if diff["persistent"]:
+        print(f"\n  PERSISTENT FINDINGS ({len(diff['persistent'])})")
+        print(f"  {'-'*40}")
+        for f in diff["persistent"]:
+            print(f"  [=] [{f['severity']}] {f['title']}")
+
+    if not diff["new"] and not diff["resolved"]:
+        print("\n  No changes between scans.")
+    print()
+
+
 def cmd_daemon(cfg: configparser.ConfigParser):
     """Run continuously, scanning on the configured interval."""
     interval_hours = float(cfg["scanning"].get("scan_interval_hours", 6))
@@ -310,7 +494,6 @@ def cmd_daemon(cfg: configparser.ConfigParser):
         except Exception as e:
             logger.exception(f"Daemon scan error: {e}")
 
-        next_run = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         logger.info(f"Next scan in {interval_hours} hours. Sleeping...")
         time.sleep(interval_sec)
 
@@ -353,6 +536,10 @@ Examples:
         "--daemon", action="store_true",
         help="Run continuously on the configured schedule",
     )
+    parser.add_argument(
+        "--diff", action="store_true",
+        help="Show what changed between the last two scans",
+    )
 
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -379,6 +566,8 @@ Examples:
         cmd_report_only(cfg)
     elif args.history:
         cmd_show_history(cfg)
+    elif args.diff:
+        cmd_diff(cfg)
     elif args.daemon:
         cmd_daemon(cfg)
     else:
