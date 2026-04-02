@@ -102,6 +102,7 @@ class DetectionEngine:
             "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
         )
         self.privileged_groups = [g.strip() for g in privileged_str.split(",")]
+        self.dormant_admin_days = int(config.get("dormant_admin_days", 90))
 
     # ------------------------------------------------------------------ #
     #  Public Entry Point                                                  #
@@ -1401,6 +1402,10 @@ class DetectionEngine:
                 "3. Check that new accounts have appropriate permissions (principle of least privilege)."
             ),
         }]
+
+    # ------------------------------------------------------------------ #
+    #  New Detections — Improvement 3                                      #
+    # ------------------------------------------------------------------ #
 
     def detect_dcsync_rights(self, domain_acl: list, domain_controllers: list) -> list:
         """

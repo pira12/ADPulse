@@ -1,2 +1,5 @@
 *.pyc
 __pycache__/
+
+# Generated offline package (54MB Windows binaries — run build_offline_package.sh to recreate)
+ADPulse_Portable/
