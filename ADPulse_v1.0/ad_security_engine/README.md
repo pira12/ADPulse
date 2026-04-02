@@ -139,30 +139,48 @@ The task runs as your current Windows user with integrated AD authentication. No
 
 For VMs with **no internet access and no Python installed** (common for read-only AD-joined VMs):
 
-### Step 1 — Build the portable package (on a machine WITH internet)
+### Step 1 — Build the portable package
+
+**Option A — From Linux (recommended if you develop on Linux):**
+```bash
+cd ADPulse_v1.0/ad_security_engine/install
+chmod +x build_offline_package.sh
+./build_offline_package.sh
+```
+
+**Option B — From a Windows machine with internet:**
 ```powershell
-cd ad_security_engine\install
+cd ADPulse_v1.0\ad_security_engine\install
 .\prepare_offline_package.ps1
 ```
-This creates an `ADPulse_Portable` folder containing:
-- **Portable Python** (embeddable distribution — no installer needed)
-- **All dependency wheels** pre-installed
+
+Both produce an `ADPulse_Portable` folder containing:
+- **Portable Python** (Windows embeddable — no installer needed)
+- **All dependency wheels** pre-installed into the Python environment
 - **ADPulse source code**
 - **`Run-ADPulse.bat`** — double-click to scan
 
-### Step 2 — Transfer to the air-gapped VM
-Copy the `ADPulse_Portable` folder via:
-- **RDP drive redirection** — access `\\tsclient\C\` from within the RDP session
-- **Network file share** — copy to `\\fileserver\share\`
-- Any other file transfer method your organization allows
+### Step 2 — Transfer to the air-gapped VM via RDP
+
+1. In your RDP client, enable drive redirection:
+   **Local Resources → More → Drives → check your local drive**
+2. Connect to the VM
+3. Inside the RDP session, open File Explorer and go to `\\tsclient\`
+4. Copy the `ADPulse_Portable` folder to `C:\` on the VM
 
 ### Step 3 — Run on the VM
+
 ```
 Double-click Run-ADPulse.bat
 ```
-On first run it opens `config.ini` for you to fill in your domain controller settings. That's it — **no installation, no Python setup, no admin rights needed**.
+On first run it creates `config.ini` and opens it in Notepad. Fill in your DC settings, then double-click again to scan. **No installation, no Python setup, no admin rights needed.**
 
-To set up recurring scans as a scheduled task:
+To test connectivity before a full scan:
+```
+Double-click Test-Connection.bat
+```
+
+To set up recurring automated scans:
 ```
 Double-click Install-ScheduledTask.bat
 ```
