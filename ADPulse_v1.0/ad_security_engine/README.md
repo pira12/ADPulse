@@ -140,10 +140,11 @@ The task runs as your current Windows user with integrated AD authentication. No
 For VMs with **no internet access and no Python installed** (common for read-only AD-joined VMs):
 
 ### Step 1 — Build the portable package (on a machine WITH internet)
-```powershell
-cd ad_security_engine\install
-.\prepare_offline_package.ps1
 ```
+cd ad_security_engine\install
+Build-Portable-Package.bat
+```
+> **Note:** Double-clicking the `.bat` file also works. This avoids PowerShell execution policy issues.
 This creates an `ADPulse_Portable` folder containing:
 - **Portable Python** (embeddable distribution — no installer needed)
 - **All dependency wheels** pre-installed
