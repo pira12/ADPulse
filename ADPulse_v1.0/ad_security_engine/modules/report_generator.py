@@ -98,19 +98,23 @@ class HTMLReportGenerator:
         elif risk_score >= 20: risk_label, risk_col = "MEDIUM",   SEVERITY_HEX["MEDIUM"]
         else:                  risk_label, risk_col = "LOW",      SEVERITY_HEX["LOW"]
 
-        # Stat cards
+        # Stat cards — clickable to filter by severity
         stat_cards = ""
         for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
             col  = SEVERITY_HEX[sev]
             icon = SEVERITY_ICON[sev]
             stat_cards += f"""
-            <div class="stat-card" style="border-top:4px solid {col};">
+            <div class="stat-card" data-sev-filter="{sev}" onclick="toggleSevFilter('{sev}')"
+                 style="border-top:4px solid {col}; cursor:pointer;" title="Click to filter {sev} findings">
                 <div class="stat-icon">{icon}</div>
                 <div class="stat-num" style="color:{col};">{counts[sev]}</div>
                 <div class="stat-lbl">{sev}</div>
             </div>"""
 
-        # Findings
+        # Collect unique categories for the category filter
+        categories = sorted(set(f.get("category", "") for f in findings))
+
+        # Findings — collapsible cards with data attributes for filtering
         findings_html = ""
         for f in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity","INFO"), 99)):
             sev   = f.get("severity", "INFO")
@@ -118,35 +122,49 @@ class HTMLReportGenerator:
             light = SEVERITY_LIGHT.get(sev, "#fafafa")
             icon  = SEVERITY_ICON.get(sev, "-")
             is_new = f.get("is_new", 1)
+            fid   = f.get("finding_id", "")
+            cat   = f.get("category", "")
 
             affected  = f.get("affected", [])
-            tags_html = "".join(f'<span class="atag">{a}</span>' for a in affected[:25])
+            tags_html = "".join(
+                f'<span class="atag" title="{a}">{a}</span>'
+                for a in affected[:25]
+            )
             if len(affected) > 25:
-                tags_html += f'<span class="atag atag-more">+{len(affected)-25} more</span>'
+                tags_html += f'<span class="atag atag-more" onclick="this.parentElement.parentElement.querySelector(\'.tags-overflow\').style.display=\'flex\';this.style.display=\'none\';">+{len(affected)-25} more (click to show)</span>'
+                tags_html += '<div class="tags tags-overflow" style="display:none;">'
+                tags_html += "".join(f'<span class="atag" title="{a}">{a}</span>' for a in affected[25:])
+                tags_html += '</div>'
 
             rem        = f.get("remediation", "").replace("\n", "<br>")
             new_badge  = '<span class="new-badge">NEW</span>' if is_new else '<span class="rec-badge">RECURRING</span>'
             first_seen = (f.get("first_seen") or "")[:10] or "This scan"
+            new_val    = "new" if is_new else "recurring"
 
             findings_html += f"""
-            <div class="finding-card">
-              <div class="finding-top" style="background:{col};">
+            <div class="finding-card" data-severity="{sev}" data-category="{cat}"
+                 data-newstatus="{new_val}" data-findingid="{fid}">
+              <div class="finding-top" style="background:{col};" onclick="toggleCard(this.parentElement)" title="Click to expand/collapse">
                 <div class="finding-top-left">
                   <span class="sev-badge">{icon} {sev}</span>
-                  <span class="cat-label">{f.get('category','')}</span>
+                  <span class="cat-label">{cat}</span>
                 </div>
-                <div>{new_badge}</div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  {new_badge}
+                  <span class="finding-title-preview">{f.get('title','')}</span>
+                  <span class="chevron">&#9660;</span>
+                </div>
               </div>
               <div class="finding-body" style="border-left:4px solid {col};background:{light};">
                 <h3 class="finding-title">{f.get('title','')}</h3>
                 <p class="finding-desc">{f.get('description','')}</p>
                 {"<div class='affected-block'><strong>Affected objects (" + str(len(affected)) + "):</strong><div class='tags'>" + tags_html + "</div></div>" if affected else ""}
-                <div class="rem-block">
+                <div class="rem-block" onclick="event.stopPropagation();">
                   <div class="rem-label">Remediation</div>
                   <p class="rem-text">{rem}</p>
                 </div>
                 <div class="finding-foot">
-                  Finding ID: <code>{f.get('finding_id','')}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
+                  Finding ID: <code>{fid}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
                 </div>
               </div>
             </div>"""
@@ -166,6 +184,11 @@ class HTMLReportGenerator:
             </div>"""
 
         new_count = sum(1 for f in findings if f.get("is_new", 1))
+
+        # Category filter options
+        cat_options = '<option value="ALL">All Categories</option>'
+        for cat in categories:
+            cat_options += f'<option value="{cat}">{cat}</option>'
 
         css = f"""
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -206,7 +229,11 @@ body {{
 .stat-card {{
   background: white; border-radius: 10px; padding: 18px 14px 14px;
   text-align: center; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+  transition: transform 0.15s, box-shadow 0.15s, opacity 0.2s;
 }}
+.stat-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,83,164,0.15); }}
+.stat-card.active {{ box-shadow: 0 0 0 3px {CS_ORANGE}, 0 4px 16px rgba(0,83,164,0.15); }}
+.stat-card.dimmed {{ opacity: 0.4; }}
 .stat-icon {{ font-size: 20px; margin-bottom: 6px; }}
 .stat-num  {{ font-size: 34px; font-weight: 800; line-height: 1; margin-bottom: 4px; }}
 .stat-lbl  {{
@@ -222,7 +249,7 @@ body {{
 .risk-bar-wrap  {{ flex: 1; }}
 .risk-bar-label {{ font-size: 11px; color: #8a99b0; margin-bottom: 6px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }}
 .risk-bar-bg    {{ background: #e8eef5; border-radius: 4px; height: 10px; overflow: hidden; }}
-.risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; }}
+.risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; transition: width 0.4s; }}
 .risk-label     {{ font-size: 15px; font-weight: 700; color: {risk_col}; }}
 .meta-box {{
   background: white; border-radius: 10px; padding: 16px 22px;
@@ -232,6 +259,38 @@ body {{
 .meta-item {{ display: flex; flex-direction: column; gap: 2px; }}
 .meta-k    {{ font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #8a99b0; }}
 .meta-v    {{ font-size: 13px; font-weight: 600; color: {CS_DARK}; }}
+
+/* ── Toolbar ── */
+.toolbar {{
+  display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
+  flex-wrap: wrap;
+}}
+.search-box {{
+  flex: 1; min-width: 200px; padding: 8px 14px; border: 1px solid #d0d8e4;
+  border-radius: 8px; font-size: 13px; font-family: inherit;
+  background: white; transition: border-color 0.2s;
+}}
+.search-box:focus {{ outline: none; border-color: {CS_BLUE}; box-shadow: 0 0 0 3px rgba(0,83,164,0.12); }}
+.filter-select {{
+  padding: 8px 12px; border: 1px solid #d0d8e4; border-radius: 8px;
+  font-size: 12px; font-family: inherit; background: white; cursor: pointer;
+}}
+.filter-select:focus {{ outline: none; border-color: {CS_BLUE}; }}
+.btn-reset {{
+  padding: 8px 16px; border: none; border-radius: 8px;
+  background: {CS_BLUE}; color: white; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit; transition: background 0.15s;
+}}
+.btn-reset:hover {{ background: {CS_MID}; }}
+.btn-collapse {{
+  padding: 8px 16px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; color: {CS_DARK}; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}}
+.filter-count {{
+  font-size: 12px; color: #8a99b0; font-weight: 600;
+}}
+
 .section-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }}
 .section-header h2 {{ font-size: 17px; font-weight: 700; color: {CS_DARK}; }}
 .count-badge {{
@@ -239,20 +298,37 @@ body {{
   font-weight: 700; padding: 2px 10px; border-radius: 12px;
 }}
 .new-info {{ font-size: 11px; color: {CS_ORANGE}; font-weight: 600; }}
+
+/* ── Finding Cards ── */
 .finding-card {{
   background: white; border-radius: 10px; overflow: hidden;
   margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+  transition: opacity 0.2s, max-height 0.3s;
 }}
+.finding-card.hidden {{ display: none; }}
 .finding-top {{
   display: flex; align-items: center;
   justify-content: space-between; padding: 8px 14px;
+  cursor: pointer; user-select: none;
 }}
+.finding-top:hover {{ filter: brightness(1.08); }}
 .finding-top-left {{ display: flex; align-items: center; gap: 10px; }}
 .sev-badge {{ color: white; font-size: 11px; font-weight: 700; }}
 .cat-label {{
   background: rgba(255,255,255,0.18); color: white;
   font-size: 10px; padding: 2px 8px; border-radius: 8px;
 }}
+.finding-title-preview {{
+  color: rgba(255,255,255,0.85); font-size: 11px; font-weight: 500;
+  max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: none;
+}}
+.finding-card.collapsed .finding-title-preview {{ display: inline; }}
+.chevron {{
+  color: rgba(255,255,255,0.6); font-size: 10px;
+  transition: transform 0.2s; display: inline-block;
+}}
+.finding-card.collapsed .chevron {{ transform: rotate(-90deg); }}
 .new-badge {{
   background: {CS_ORANGE}; color: white;
   font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 8px;
@@ -261,16 +337,27 @@ body {{
   background: rgba(255,255,255,0.2); color: white;
   font-size: 9px; padding: 2px 7px; border-radius: 8px;
 }}
-.finding-body    {{ padding: 14px 18px 12px; border-left-width:4px; border-left-style:solid; }}
+.finding-body {{
+  padding: 14px 18px 12px; border-left-width:4px; border-left-style:solid;
+  transition: max-height 0.3s ease, padding 0.2s ease, opacity 0.2s ease;
+  overflow: hidden;
+}}
+.finding-card.collapsed .finding-body {{
+  max-height: 0 !important; padding: 0 18px; opacity: 0;
+}}
 .finding-title   {{ font-size: 14px; font-weight: 700; margin-bottom: 7px; color: {CS_DARK}; }}
 .finding-desc    {{ font-size: 13px; color: #3a4a5e; line-height: 1.6; margin-bottom: 10px; }}
 .affected-block  {{ margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #4a5a6e; }}
 .tags            {{ display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }}
+.tags-overflow   {{ flex-wrap: wrap; gap: 4px; margin-top: 4px; }}
 .atag {{
   background: #e8eef5; color: {CS_DARK}; padding: 2px 7px;
   border-radius: 4px; font-size: 10px; font-family: 'Courier New', monospace;
+  cursor: default; transition: background 0.15s;
 }}
-.atag-more {{ background: {CS_BLUE}; color: white; }}
+.atag:hover {{ background: #d0dcea; }}
+.atag-more {{ background: {CS_BLUE}; color: white; cursor: pointer; }}
+.atag-more:hover {{ background: {CS_MID}; }}
 .rem-block {{
   background: rgba(255,255,255,0.7); border: 1px solid #dde5ef;
   border-radius: 6px; padding: 10px 12px; margin-bottom: 8px;
@@ -296,11 +383,130 @@ code {{
   text-align: center; color: #8a99b0;
   box-shadow: 0 2px 8px rgba(0,83,164,0.07);
 }}
+
+/* ── Tooltip for affected objects ── */
+.atag[title] {{ position: relative; }}
+
+/* ── Print styles ── */
+@media print {{
+  .toolbar {{ display: none; }}
+  .finding-card.collapsed .finding-body {{ max-height: none !important; padding: 14px 18px 12px; opacity: 1; }}
+  .stat-card {{ cursor: default; }}
+}}
+
 @media (max-width:900px) {{
   .stats-row {{ grid-template-columns: repeat(3,1fr); }}
   .meta-row  {{ grid-template-columns: repeat(2,1fr); }}
   .header-inner {{ flex-direction: column; align-items: flex-start; }}
+  .toolbar {{ flex-direction: column; }}
+  .search-box {{ min-width: 100%; }}
 }}"""
+
+        js = """
+/* ── Interactive Report Logic ── */
+var activeSev = null;
+var activeCategory = 'ALL';
+var activeNewFilter = 'ALL';
+var searchQuery = '';
+var allCollapsed = false;
+
+function toggleCard(card) {
+  card.classList.toggle('collapsed');
+}
+
+function toggleSevFilter(sev) {
+  var cards = document.querySelectorAll('.stat-card');
+  if (activeSev === sev) {
+    activeSev = null;
+    cards.forEach(function(c) { c.classList.remove('active','dimmed'); });
+  } else {
+    activeSev = sev;
+    cards.forEach(function(c) {
+      if (c.getAttribute('data-sev-filter') === sev) {
+        c.classList.add('active');
+        c.classList.remove('dimmed');
+      } else {
+        c.classList.remove('active');
+        c.classList.add('dimmed');
+      }
+    });
+  }
+  applyFilters();
+}
+
+function applyFilters() {
+  var cards = document.querySelectorAll('.finding-card');
+  var visible = 0;
+  cards.forEach(function(card) {
+    var show = true;
+    if (activeSev && card.getAttribute('data-severity') !== activeSev) show = false;
+    if (activeCategory !== 'ALL' && card.getAttribute('data-category') !== activeCategory) show = false;
+    if (activeNewFilter !== 'ALL' && card.getAttribute('data-newstatus') !== activeNewFilter) show = false;
+    if (searchQuery) {
+      var text = card.textContent.toLowerCase();
+      if (text.indexOf(searchQuery) === -1) show = false;
+    }
+    if (show) {
+      card.classList.remove('hidden');
+      visible++;
+    } else {
+      card.classList.add('hidden');
+    }
+  });
+  var counter = document.getElementById('filter-count');
+  var total = cards.length;
+  if (counter) {
+    if (activeSev || activeCategory !== 'ALL' || activeNewFilter !== 'ALL' || searchQuery) {
+      counter.textContent = 'Showing ' + visible + ' of ' + total + ' findings';
+    } else {
+      counter.textContent = '';
+    }
+  }
+}
+
+function onSearchInput(e) {
+  searchQuery = e.target.value.toLowerCase().trim();
+  applyFilters();
+}
+
+function onCategoryChange(e) {
+  activeCategory = e.target.value;
+  applyFilters();
+}
+
+function onNewFilterChange(e) {
+  activeNewFilter = e.target.value;
+  applyFilters();
+}
+
+function resetFilters() {
+  activeSev = null;
+  activeCategory = 'ALL';
+  activeNewFilter = 'ALL';
+  searchQuery = '';
+  document.getElementById('search-input').value = '';
+  document.getElementById('cat-filter').value = 'ALL';
+  document.getElementById('new-filter').value = 'ALL';
+  document.querySelectorAll('.stat-card').forEach(function(c) {
+    c.classList.remove('active','dimmed');
+  });
+  applyFilters();
+}
+
+function toggleAllCards() {
+  allCollapsed = !allCollapsed;
+  var cards = document.querySelectorAll('.finding-card');
+  cards.forEach(function(card) {
+    if (allCollapsed) {
+      card.classList.add('collapsed');
+    } else {
+      card.classList.remove('collapsed');
+    }
+  });
+  var btn = document.getElementById('btn-toggle');
+  if (btn) btn.textContent = allCollapsed ? 'Expand All' : 'Collapse All';
+}
+"""
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -347,6 +553,19 @@ code {{
     {"<span class='new-info'>&#9888; " + str(new_count) + " new since last scan</span>" if new_count else ""}
   </div>
 
+  <div class="toolbar">
+    <input type="text" id="search-input" class="search-box" placeholder="Search findings (title, description, affected objects...)" oninput="onSearchInput(event)">
+    <select id="cat-filter" class="filter-select" onchange="onCategoryChange(event)">{cat_options}</select>
+    <select id="new-filter" class="filter-select" onchange="onNewFilterChange(event)">
+      <option value="ALL">All Status</option>
+      <option value="new">New Only</option>
+      <option value="recurring">Recurring Only</option>
+    </select>
+    <button class="btn-collapse" id="btn-toggle" onclick="toggleAllCards()">Collapse All</button>
+    <button class="btn-reset" onclick="resetFilters()">Reset Filters</button>
+    <span class="filter-count" id="filter-count"></span>
+  </div>
+
   {findings_html if findings else "<div class='no-findings'><div style='font-size:48px;margin-bottom:12px;'>&#9989;</div><strong>No findings detected.</strong><br>Your environment looks clean.</div>"}
 
 </div>
@@ -357,6 +576,7 @@ code {{
   <em>This report is confidential. Do not distribute outside your organisation.</em>
 </div>
 
+<script>{js}</script>
 </body>
 </html>"""
 
