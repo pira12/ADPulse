@@ -58,6 +58,8 @@ SAMPLE_KERBEROASTABLE = [
         "servicePrincipalName": ["MSSQLSvc/db01.corp.local:1433"],
         "adminCount": 0,
         "userAccountControl": 0x200,
+        "lastLogonTimestamp": datetime.now(tz=timezone.utc) - timedelta(days=10),
+        "pwdLastSet": datetime.now(tz=timezone.utc) - timedelta(days=30),
         "dn": "CN=svc-sql,OU=ServiceAccounts,DC=corp,DC=local",
     }
 ]
