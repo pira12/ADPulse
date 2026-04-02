@@ -101,6 +101,7 @@ class DetectionEngine:
             "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
         )
         self.privileged_groups = [g.strip() for g in privileged_str.split(",")]
+        self.dormant_admin_days = int(config.get("dormant_admin_days", 90))
 
     # ------------------------------------------------------------------ #
     #  Public Entry Point                                                  #
@@ -1398,5 +1399,64 @@ class DetectionEngine:
                 "1. Verify all new accounts were created through an authorised process.\n"
                 "2. Confirm accounts are assigned to real, known individuals.\n"
                 "3. Check that new accounts have appropriate permissions (principle of least privilege)."
+            ),
+        }]
+
+    def detect_dormant_privileged_accounts(self, users: list, privileged_members: dict) -> list:
+        """
+        PRIV-001-DORMANT-ADMIN: Enabled privileged accounts inactive for
+        more than dormant_admin_days days. An unused admin account is a
+        free credential for an attacker who finds the password.
+        """
+        # Build a set of sAMAccountNames that appear in any privileged group
+        priv_accounts = set()
+        for members in privileged_members.values():
+            for dn in members:
+                # Extract CN from DN: "CN=admin1,OU=..." → "admin1"
+                cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "").strip().lower()
+                priv_accounts.add(cn)
+
+        dormant = []        # list of account name strings for "affected"
+        dormant_detail = [] # list of "name (Nd ago)" for details
+        for u in users:
+            sam = _account_name(u).lower()
+            if sam not in priv_accounts:
+                continue
+            uac = u.get("userAccountControl") or 0
+            try:
+                uac = int(uac)
+            except (TypeError, ValueError):
+                uac = 0
+            if uac & UAC_DISABLED:
+                continue  # disabled accounts are not a login risk
+
+            days = _days_since(_to_datetime(u.get("lastLogonTimestamp")))
+            if days is not None and days > self.dormant_admin_days:
+                name = _account_name(u)
+                dormant.append(name)
+                dormant_detail.append(f"{name} ({days}d ago)")
+
+        if not dormant:
+            return []
+        return [{
+            "finding_id":   "PRIV-001-DORMANT-ADMIN",
+            "category":     "Privileged Access",
+            "severity":     "HIGH",
+            "title":        f"{len(dormant)} Dormant Privileged Account(s)",
+            "description": (
+                f"{len(dormant)} enabled account(s) in privileged groups have not "
+                f"authenticated in more than {self.dormant_admin_days} days. "
+                "Unused admin accounts are high-value targets — if credentials are "
+                "compromised the account can be used without triggering normal activity alerts."
+            ),
+            "affected":     dormant,
+            "details":      {"count": len(dormant), "threshold_days": self.dormant_admin_days, "accounts": dormant_detail},
+            "remediation": (
+                "1. Confirm with the account owner whether the account is still needed.\n"
+                "2. Disable accounts no longer required: Disable-ADAccount.\n"
+                "3. If the account is legitimately unused, consider removing its group memberships "
+                "   and re-adding when needed (just-in-time access).\n"
+                f"4. Adjust dormant_admin_days in config.ini if the {self.dormant_admin_days}-day "
+                "   threshold does not match your environment."
             ),
         }]
