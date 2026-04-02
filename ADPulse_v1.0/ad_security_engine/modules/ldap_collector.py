@@ -114,7 +114,8 @@ def _sid_bytes_to_str(sid_bytes: bytes) -> str:
     sub_count = sid_bytes[1]
     authority = int.from_bytes(sid_bytes[2:8], "big")
     subs = struct.unpack_from(f"<{sub_count}I", sid_bytes, 8)
-    return f"S-{revision}-{authority}-" + "-".join(str(s) for s in subs)
+    base = f"S-{revision}-{authority}"
+    return f"{base}-" + "-".join(str(s) for s in subs) if subs else base
 
 
 def _sid_bytes_to_ldap_filter(sid_bytes: bytes) -> str:
