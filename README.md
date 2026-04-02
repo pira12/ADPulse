@@ -221,7 +221,62 @@ email_attach_pdf = true
 
 ## Deployment
 
-### Windows (Recommended)
+### Portable Edition (Air-Gapped / Offline Windows) — Recommended for RDP/VM Deployments
+
+The `ADPulse_Portable` package bundles a self-contained portable Python runtime and pre-downloaded wheels so it runs on any Windows machine with **no internet access and no Python installation required**. This is the preferred deployment method for domain-joined VMs accessed over RDP.
+
+#### Step 1 — Build the package (one-time, on a machine with internet)
+
+**On Linux or WSL:**
+```bash
+cd ADPulse_v1.0/ad_security_engine/install
+./build_offline_package.sh
+# Produces: ADPulse_Portable/ in the project root
+```
+
+**On Windows (PowerShell):**
+```powershell
+cd ADPulse_v1.0\ad_security_engine\install
+.\prepare_offline_package.ps1
+# Produces: ADPulse_Portable\ in the project root
+```
+
+#### Step 2 — Transfer to the target Windows VM
+
+Copy the entire `ADPulse_Portable` folder to the VM (USB, file share, RDP clipboard, etc.).
+
+#### Step 3 — Configure
+
+Open `ADPulse_Portable\ad_security_engine\config.ini.example`, save it as `config.ini` in the same folder, and fill in your domain controller settings:
+
+```ini
+[ldap]
+server = dc01.company.local
+domain = company.local
+username = svc-secmonitor
+password = YourPasswordHere
+port = 636
+use_ssl = true
+```
+
+#### Step 4 — Run
+
+| Action | How |
+|---|---|
+| **First-time setup + scheduled task** | Double-click `Install-ScheduledTask.bat` (or run `install_offline.ps1` in PowerShell) |
+| **Run a scan now** | Double-click `Run-ADPulse.bat` |
+| **Test LDAP connectivity** | Double-click `Test-Connection.bat` |
+| **Manual scan (PowerShell)** | `.\python\python.exe .\ad_security_engine\main.py` |
+| **Scheduled task (custom interval)** | `.\install_offline.ps1 -IntervalHours 12` |
+| **Install without creating a scheduled task** | `.\install_offline.ps1 -SkipScheduledTask` |
+
+Reports are written to `ADPulse_Portable\ad_security_engine\output\` after each scan.
+
+> **Note:** `Run-ADPulse.bat` auto-creates `config.ini` from the example template on first run and opens it in Notepad for editing. Re-run the script after saving.
+
+---
+
+### Windows (Standard — requires Python installed)
 
 ```powershell
 # 1. Create a dedicated service account (run as Domain Admin, one-time setup)
