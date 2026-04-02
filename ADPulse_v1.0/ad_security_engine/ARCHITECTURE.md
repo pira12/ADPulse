@@ -11,6 +11,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Local-only data storage (SQLite)
 - No email server dependency
 - Configurable exclusion lists and severity overrides per finding
+- Finding policy lifecycle (accepted_risk / in_remediation / resolved) for noise reduction
 
 ---
 
@@ -22,7 +23,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 │                            main.py                                  │
 │  Parses arguments, loads config, orchestrates the 6-step scan       │
 │  Modes: scan | --test-connection | --report-only | --history |      │
-│         --daemon                                                    │
+│         --daemon | --diff | --policy                                │
 └───────────────────────────────┬─────────────────────────────────────┘
                                 │
                 ┌───────────────┼───────────────────┐
@@ -31,14 +32,29 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
    │ LDAPCollector    │ │ BaselineEngine│ │ DetectionEngine  │
    │ ldap_collector.py│ │ baseline_     │ │ detections.py    │
    │                  │ │ engine.py     │ │                  │
-   │ Connects to AD   │ │ SQLite DB     │ │ 26+ security     │
-   │ via LDAP/NTLM.   │ │ management.   │ │ detectors.       │
-   │ ~26 read-only    │ │ Stores        │ │ Point-in-time &  │
-   │ query methods.   │ │ snapshots &   │ │ delta-based      │
-   │ Zero writes.     │ │ detects drift │ │ analysis.        │
+   │ 28 read-only     │ │ SQLite DB     │ │ 30+ security     │
+   │ LDAP queries.    │ │ management.   │ │ detectors.       │
+   │ Parallel via     │ │ Stores        │ │ Point-in-time &  │
+   │ ThreadPool-      │ │ snapshots &   │ │ delta-based      │
+   │ Executor.        │ │ detects drift │ │ analysis.        │
    └────────┬─────────┘ └───────┬───────┘ └────────┬─────────┘
             │                   │                   │
             └───────────────────┼───────────────────┘
+                                │
+                         ┌──────┴──────┐
+                         ▼             │
+            ┌────────────────────┐     │
+            │  PolicyManager     │     │
+            │  policy_manager.py │     │
+            │                    │     │
+            │  JSON-backed CRUD  │     │
+            │  for per-finding   │     │
+            │  policy decisions. │     │
+            │  Splits findings   │     │
+            │  into active /     │     │
+            │  suppressed.       │     │
+            └──────────┬─────────┘     │
+                       └───────────────┘
                                 │
                 ┌───────────────┼───────────────────┐
                 ▼                                   ▼
@@ -46,10 +62,10 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
    │ ReportManager        │              │ OutputNotifier        │
    │ report_generator.py  │              │ notifier.py           │
    │                      │              │                       │
-   │ HTML + PDF reports   │              │ Console summary       │
-   │ with ADPulse         │              │ Plain-text .txt file  │
-   │ branding. Uses       │              │ JSON export (SIEM)    │
-   │ ReportLab for PDF.   │              │ Windows Event Log     │
+   │ HTML (policy badges  │              │ Console summary       │
+   │ + audit trail) +     │              │ Plain-text .txt file  │
+   │ PDF + trend dash.    │              │ JSON export (SIEM)    │
+   │ Uses ReportLab.      │              │ Windows Event Log     │
    └──────────────────────┘              └───────────────────────┘
 ```
 
@@ -63,10 +79,12 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Connection timeout is configurable
 - Uses `ldap3` library — pure Python, no OS dependencies
 
-### Step 2: Collect AD Data
-- ~26 specialized LDAP queries run against the domain controller
+### Step 2: Collect AD Data (Parallel)
+- 28 specialized LDAP queries run concurrently via `concurrent.futures.ThreadPoolExecutor`
+- `_collect_ad_data()` in `main.py` dispatches all queries in parallel and merges results
+- Each query has an independent exception handler — a single failed query does not abort the scan
 - All queries use standard LDAP read operations (no writes)
-- Data collected includes: users, computers, groups, delegation, password policies, SPNs, UAC flags, SID History, LAPS status, and more
+- Data collected includes: users, computers, groups, delegation, password policies, SPNs, UAC flags, SID History, LAPS status, domain ACL (for DCSync detection), and more
 - Results are returned as lists of dictionaries
 
 ### Step 3: Update Baseline Database
@@ -76,15 +94,24 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Tables: `snapshots`, `user_objects`, `group_members`, `computer_objects`, `findings_history`
 
 ### Step 4: Run Security Detections
-- `DetectionEngine` runs 26+ detection methods against the collected data
-- **Point-in-time detections**: Analyze current state (Kerberoasting, weak policies, etc.)
+- `DetectionEngine` runs 30+ detection methods against the collected data
+- **Point-in-time detections**: Analyze current state (Kerberoasting, weak policies, DCSync rights, etc.)
 - **Delta detections**: Compare against previous scan (new admin group members, new accounts)
 - Each finding is a standardized dict with: `finding_id`, `severity`, `title`, `description`, `affected`, `remediation`
 - Findings are deduplicated by `finding_id` and sorted by severity
 
+### Step 4b: Apply Finding Policy
+- `PolicyManager` loads `policy.json` (stored alongside `config.ini`)
+- Expired `accepted_risk` entries are automatically demoted to `in_remediation`
+- `resolved` findings that have reappeared are automatically demoted to `in_remediation`
+- `apply_to_findings()` splits the finding list into:
+  - **Active** — findings shown in the main report (including `in_remediation` findings with a badge)
+  - **Suppressed** — `accepted_risk` and `resolved` findings, passed to the audit trail section of the HTML report
+
 ### Step 5: Generate Reports
 - `ReportManager` generates HTML and PDF reports
 - Reports include: risk score, severity breakdown, finding details, remediation steps
+- HTML report: `in_remediation` findings carry an **IN REMEDIATION** badge; suppressed findings appear in a separate Policy Audit Trail section
 - PDF uses ReportLab with ADPulse branding
 - HTML is self-contained (no external dependencies)
 

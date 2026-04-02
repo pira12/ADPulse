@@ -1,6 +1,6 @@
 # ADPulse Detection Catalog
 
-Complete reference of all 26+ security detections performed by ADPulse.
+Complete reference of all 30+ security detections performed by ADPulse.
 All detections use **read-only LDAP queries** and require only **standard Domain User** privileges.
 
 ---
@@ -9,8 +9,10 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 
 | ID | Category | Severity | Detection |
 |---|---|---|---|
+| ACL-001-DCSYNC | Privileged Access | CRITICAL | Non-DC Accounts with DCSync Rights |
 | KERB-001-PRIVILEGED | Kerberos | CRITICAL | Kerberoastable Privileged Accounts |
 | KERB-001-STANDARD | Kerberos | HIGH | Kerberoastable Service Accounts |
+| KERB-003-PRIVESC-SPN | Kerberos | CRITICAL | Privileged Kerberoastable Accounts (SPN + Admin Group) |
 | KERB-002-ASREP | Kerberos | CRITICAL/HIGH | AS-REP Roastable Accounts |
 | DELEG-001-UNCONSTRAINED | Delegation | CRITICAL | Unconstrained Kerberos Delegation |
 | DELEG-002-CONSTRAINED | Delegation | MEDIUM | Constrained Delegation Configured |
@@ -21,6 +23,8 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 | ACCT-001-VERY-STALE | Account Hygiene | HIGH | Highly Stale Active Accounts |
 | ACCT-001-STALE | Account Hygiene | MEDIUM | Stale Active Accounts |
 | PRIV-001-ADMINCOUNT-ORPHAN | Privileged Access | MEDIUM | Orphaned adminCount=1 Accounts |
+| PRIV-001-DORMANT-ADMIN | Privileged Access | HIGH | Dormant Privileged Accounts (90+ days inactive) |
+| PRIV-002-NESTED-PRIV | Privileged Access | MEDIUM | Accounts with Indirect Privileged Access via Group Nesting |
 | PRIV-002-SID-HISTORY | Privileged Access | HIGH/MEDIUM | Accounts with SID History |
 | PRIV-003-NO-PROTECTED-USERS | Privileged Access | MEDIUM | Privileged Accounts Not in Protected Users |
 | POL-001-NO-POLICY | Password Policy | HIGH | Cannot Retrieve Password Policy |
@@ -498,3 +502,73 @@ To add a new detection:
 3. **Wire it into `run_all_detections()`** in `detections.py`
 4. **Add data collection** in `main.py`'s `ad_data` dictionary
 5. **Document it** in this file
+
+---
+
+### Privileged Access — New Detections
+
+#### ACL-001-DCSYNC — Non-DC Accounts with DCSync Rights
+
+**What it detects:** Non-domain-controller accounts that hold the `DS-Replication-Get-Changes-All` extended right on the domain root object.
+
+**Why it matters:** This right, combined with `DS-Replication-Get-Changes`, allows the holder to replicate all password hashes from a Domain Controller — including krbtgt and all user accounts — using the DCSync technique (e.g., Mimikatz `lsadump::dcsync`). No physical access to a DC is required. Any account holding this right is effectively a silent, unchecked Domain Admin.
+
+**How it works:** ADPulse reads the binary security descriptor (`nTSecurityDescriptor`) of the domain root object via LDAP. It parses the DACL to find `ALLOWED_OBJECT_ACE` entries matching the DCSync GUIDs, then resolves each granting SID to a `sAMAccountName`. Domain controllers are excluded from findings as expected holders.
+
+**Severity:** Always `CRITICAL`
+
+**Remediation:**
+1. Identify how the permission was granted (deliberate delegation, GPO, legacy tool, or attacker activity).
+2. In ADUC: right-click domain root → Properties → Security → find the account → remove `Replicating Directory Changes All`.
+3. Investigate whether a DCSync attack has already occurred (check DC logs for suspicious replication requests, look for mimikatz indicators).
+
+---
+
+#### PRIV-001-DORMANT-ADMIN — Dormant Privileged Accounts
+
+**What it detects:** Enabled accounts in privileged groups (Domain Admins, Enterprise Admins, etc.) that have not authenticated in more than `dormant_admin_days` days (default: 90), **or have never logged on at all**.
+
+**Why it matters:** Unused admin accounts are high-value targets. If credentials are compromised (password reuse, phishing, breach), the attacker can use the account without triggering any unusual activity alerts — the account was already silent. Never-logged-on admin accounts are especially dangerous: they may have been created during setup and forgotten, with a default or known password.
+
+**Severity:** `HIGH`
+
+**Configuration:** Set `dormant_admin_days` in `config.ini` under `[scanning]`.
+
+**Remediation:**
+1. Confirm with the account owner whether the account is still needed.
+2. Disable unused accounts (`Disable-ADAccount`).
+3. If legitimately unused, remove privileged group memberships and re-add only when needed (just-in-time access).
+
+---
+
+#### PRIV-002-NESTED-PRIV — Indirect Privileged Access via Group Nesting
+
+**What it detects:** User accounts that are **not direct members** of privileged groups but reach them through one or more intermediate group memberships (e.g., `jsmith → HelpDesk → Domain Admins`).
+
+**Why it matters:** Standard AD access reviews check direct group membership. Nested memberships are invisible to tools that do not recurse group trees. An attacker who discovers a nested path can obtain effective privileged access that defenders have not reviewed and may not know exists.
+
+**How it works:** ADPulse performs a recursive depth-limited traversal (max 10 levels) of all group memberships to find user accounts with indirect paths to privileged groups. Both directions are checked: sub-groups of privileged groups and outer groups that contain privileged groups as members.
+
+**Severity:** `MEDIUM`
+
+**Remediation:**
+1. Review each nested membership chain listed in the finding's affected list.
+2. Determine whether the indirect access is intentional.
+3. Either remove the intermediate group from the privileged group, or remove the user from the intermediate group.
+4. Flatten group nesting for privileged groups to make future access reviews straightforward.
+
+---
+
+#### KERB-003-PRIVESC-SPN — Privileged Kerberoastable Accounts
+
+**What it detects:** Accounts with Service Principal Names (SPNs) that are **also members of privileged groups**.
+
+**Why it matters:** Any domain user can request a Kerberos service ticket for any account with an SPN and attempt offline password cracking. When a service account is also a Domain Admin or equivalent, a cracked hash yields immediate full domain compromise with no further exploitation required.
+
+**Severity:** Always `CRITICAL`
+
+**Remediation:**
+1. Remove service accounts from privileged groups — service accounts should never be administrators.
+2. If admin rights are genuinely required, use a Group Managed Service Account (gMSA) — these have auto-rotating 120+ character passwords and cannot be Kerberoasted.
+3. As an interim measure, set a long random password (25+ characters) on the account.
+4. Enable `Require Kerberos AES encryption` on the account to prevent RC4-based Kerberoasting while you remediate.

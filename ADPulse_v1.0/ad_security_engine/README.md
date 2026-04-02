@@ -11,7 +11,9 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 | **No service account** | Uses integrated Windows auth — just run on a domain-joined VM with AD read access |
 | **Fully automated** | Runs as a Windows Scheduled Task or daemon, zero manual effort |
 | **Baseline & delta** | Detects *changes* between scans, not just point-in-time issues |
-| **Professional reports** | Auto-generates branded PDF and HTML reports |
+| **Finding policy lifecycle** | Mark findings as `accepted_risk`, `in_remediation`, or `resolved` via `--policy` CLI |
+| **Parallel LDAP scan** | All 28 AD queries run concurrently — faster scans on large environments |
+| **Professional reports** | Auto-generates branded PDF and interactive HTML reports with policy badges |
 | **Email alerting** | Sends severity-filtered alerts with the PDF attached |
 | **SQLite storage** | No external database — single file, zero infrastructure |
 | **Cross-platform** | Python — runs on Windows, Linux (for hybrid environments) |
@@ -27,6 +29,10 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 - **Constrained delegation** — audited and flagged for review
 
 ### Privileged Access
+- **DCSync rights** — non-DC accounts with DS-Replication-Get-Changes-All (can dump all hashes)
+- **Dormant privileged accounts** — admin accounts inactive for 90+ days or never logged on
+- **Nested group privilege** — accounts reaching Domain Admins through intermediate group chains
+- **Privileged Kerberoastable accounts** — service accounts in privileged groups (crack hash = instant admin)
 - **Privileged group changes** — additions/removals from Domain Admins, Enterprise Admins, etc.
 - **AdminCount=1 orphans** — former admin accounts with leftover elevated ACLs
 - New accounts appearing since last scan
@@ -195,8 +201,21 @@ python main.py --daemon             # Run continuously on schedule
 python main.py --test-connection    # Test LDAP connectivity only
 python main.py --report-only        # Regenerate report from last scan
 python main.py --history            # Show recent scan history
+python main.py --diff               # Show what changed between last two scans
 python main.py --config /path.ini   # Use a custom config file
+
+# Finding policy management
+python main.py --policy list
+python main.py --policy accept    KERB-001-STANDARD --reason "Legacy app, accepted risk"
+python main.py --policy remediate PRIV-001-DORMANT-ADMIN --reason "Ticket #1234 in progress"
+python main.py --policy resolve   ACCT-001-STALE
+python main.py --policy clear     KERB-001-STANDARD
 ```
+
+Policy decisions are stored in `policy.json` alongside `config.ini`. On the next scan:
+- `accepted_risk` and `resolved` findings are removed from the active report and appear in the HTML audit trail section.
+- `in_remediation` findings remain visible with an **IN REMEDIATION** badge and the reason text.
+- If a `resolved` finding reappears, it is automatically demoted back to `in_remediation`.
 
 ---
 
@@ -204,18 +223,27 @@ python main.py --config /path.ini   # Use a custom config file
 
 ```
 ad_security_engine/
-├── main.py                         # Entry point & orchestrator
+├── main.py                         # Entry point, orchestrator, --policy CLI
 ├── config.ini.example              # Configuration template
 ├── requirements.txt
 ├── modules/
-│   ├── ldap_collector.py           # All LDAP queries (read-only)
+│   ├── ldap_collector.py           # 28 read-only LDAP queries (parallel via ThreadPoolExecutor)
 │   ├── baseline_engine.py          # SQLite baseline & delta detection
-│   ├── detections.py               # All security finding detectors
-│   ├── alerting.py                 # Email alerting
-│   └── report_generator.py        # PDF + HTML report generation
+│   ├── detections.py               # 30+ security detection methods
+│   ├── policy_manager.py           # Finding lifecycle (accepted_risk/in_remediation/resolved)
+│   ├── report_generator.py         # HTML (policy badges + audit trail), PDF, CSV, trend dashboard
+│   └── notifier.py                 # Console, text, JSON, Event Log, webhook, syslog, email
+├── tests/
+│   ├── fixtures.py                 # Shared mock AD data for all tests
+│   ├── test_detections_new.py      # Tests for new detection methods
+│   ├── test_parallel_scan.py       # Tests for parallel LDAP collection
+│   ├── test_policy_manager.py      # Tests for PolicyManager
+│   ├── test_report_policy.py       # Tests for policy badges in HTML
+│   └── test_notifier_policy.py     # Tests for suppressed count in console/PDF
 ├── install/
 │   ├── install_scheduled_task.ps1  # Installs as Windows Scheduled Task
-│   ├── prepare_offline_package.ps1 # Builds offline bundle (run with internet)
+│   ├── build_offline_package.sh    # Linux: builds portable Windows package
+│   ├── prepare_offline_package.ps1 # Windows: builds portable package (run with internet)
 │   └── install_offline.ps1         # Installs from offline bundle (no internet)
 ├── output/                         # Generated reports (auto-created)
 └── logs/                           # Rotating log files (auto-created)

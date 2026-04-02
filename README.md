@@ -14,7 +14,7 @@
 
 ## What is ADPulse?
 
-ADPulse continuously monitors your Active Directory environment for security misconfigurations, attack paths, and drift - **without requiring admin rights**. It connects via standard LDAP (readable by any authenticated domain user), detects 26+ security issues, tracks changes between scans, and generates professional reports.
+ADPulse continuously monitors your Active Directory environment for security misconfigurations, attack paths, and drift - **without requiring admin rights**. It connects via standard LDAP (readable by any authenticated domain user), detects 30+ security issues, tracks changes between scans, and generates professional reports.
 
 ### Why ADPulse?
 
@@ -26,6 +26,7 @@ ADPulse continuously monitors your Active Directory environment for security mis
 - **Interactive HTML reports** - Filter by severity, search findings, collapse/expand cards.
 - **SIEM-ready** - JSON export and optional Windows Event Log integration.
 - **Multi-domain support** - Scan multiple AD domains in one run.
+- **Finding policy lifecycle** - Mark findings as accepted risk, in remediation, or resolved. Suppressed findings appear in an audit trail section of the HTML report.
 - **Exclusion lists** - Suppress accepted-risk findings so reports stay actionable.
 - **Severity overrides** - Customize finding priorities to match your organization's risk model.
 - **CSV export** - Export findings to CSV for spreadsheet analysis.
@@ -37,12 +38,13 @@ ADPulse continuously monitors your Active Directory environment for security mis
 
 ---
 
-## Security Detections (26+)
+## Security Detections (30+)
 
 ### Kerberos Attack Paths
 | Detection | Severity | Description |
 |---|---|---|
 | Kerberoastable Accounts | CRITICAL/HIGH | Users with SPNs vulnerable to offline password cracking |
+| Privileged Kerberoastable Accounts | CRITICAL | Kerberoastable accounts that are also in privileged groups |
 | AS-REP Roastable | CRITICAL/HIGH | Pre-auth disabled - attackable without credentials |
 | Unconstrained Delegation | CRITICAL | Systems caching TGTs - full domain takeover risk |
 | Constrained Delegation | MEDIUM | Service-specific delegation - audit required |
@@ -59,6 +61,9 @@ ADPulse continuously monitors your Active Directory environment for security mis
 ### Privileged Access
 | Detection | Severity | Description |
 |---|---|---|
+| DCSync Rights | CRITICAL | Non-DC accounts with domain replication rights (hash dump risk) |
+| Dormant Privileged Accounts | HIGH | Admin accounts inactive for 90+ days or never logged on |
+| Nested Group Privilege | MEDIUM | Accounts reaching privileged groups through group nesting chains |
 | Privileged Group Changes | CRITICAL | New members added to Domain Admins, etc. (delta) |
 | SID History | HIGH/MEDIUM | Migration artifacts enabling privilege escalation |
 | Protected Users Coverage | MEDIUM | Privileged accounts missing hardened protections |
@@ -139,6 +144,13 @@ python main.py --report-only    # Regenerate reports from last scan
 python main.py --history        # View scan history
 python main.py --daemon         # Run continuously (every 6 hours)
 python main.py --diff           # Show what changed between the last two scans
+
+# Finding policy management
+python main.py --policy list
+python main.py --policy accept  KERB-001-STANDARD --reason "Legacy app, waived until Q3"
+python main.py --policy remediate PRIV-001-DORMANT-ADMIN --reason "Ticket #1234 open"
+python main.py --policy resolve ACCT-001-STALE
+python main.py --policy clear   KERB-001-STANDARD
 ```
 
 ---
@@ -246,16 +258,18 @@ python main.py --daemon
 ## Architecture
 
 ```
-main.py                     Entry point & orchestrator (6-step scan lifecycle)
+main.py                     Entry point & orchestrator (parallel LDAP scan, policy dispatch)
 modules/
-  ldap_collector.py         ~20 read-only LDAP queries against AD (multi-domain aware)
+  ldap_collector.py         28 read-only LDAP queries, parallel execution via ThreadPoolExecutor
   baseline_engine.py        SQLite database for snapshots, drift detection & retention cleanup
-  detections.py             26+ security detection methods
-  report_generator.py       Interactive HTML, branded PDF, CSV & trend dashboard generation
+  detections.py             30+ security detection methods
+  policy_manager.py         Finding lifecycle — accepted_risk, in_remediation, resolved states
+  report_generator.py       Interactive HTML (with policy badges), branded PDF, CSV & trend dashboard
   notifier.py               Console, text, JSON, Event Log, webhook, syslog & email output
 install/
-  create_service_account.ps1    Windows service account setup
   install_scheduled_task.ps1    Windows scheduled task deployment
+  build_offline_package.sh      Linux: builds portable Windows package
+  prepare_offline_package.ps1   Windows: builds portable package
 ```
 
 See [ARCHITECTURE.md](ADPulse_v1.0/ad_security_engine/ARCHITECTURE.md) for detailed system design, data flow diagrams, and module reference.
