@@ -23,6 +23,7 @@ import logging.handlers
 import sys
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -167,6 +168,81 @@ def _get_ldap_configs(cfg: configparser.ConfigParser) -> list:
     return configs
 
 
+# Default empty results for each key (used when a query fails or returns None)
+_AD_DATA_DEFAULTS = {
+    "users": [], "kerberoastable": [], "asreproastable": [], "pwd_never_expires": [],
+    "admincount_users": [], "privileged_members": {}, "computers": [],
+    "domain_controllers": [], "unconstrained_delegation": [], "constrained_delegation": [],
+    "password_policy": None, "gpo_links": [], "fine_grained_policies": [],
+    "domain_info": {}, "pwd_not_required": [], "reversible_encryption": [],
+    "sid_history": [], "protected_users": [], "description_passwords": [],
+    "computers_without_laps": [], "krbtgt": None, "trusts": [],
+    "tombstone_lifetime": None, "dns_zones": [], "des_only_accounts": [],
+    "expiring_accounts": [], "all_groups": [], "domain_acl": [],
+}
+
+
+def _collect_ad_data(collector, scanning_cfg: dict) -> dict:
+    """
+    Run all AD LDAP queries. Independent queries run in parallel via ThreadPoolExecutor.
+    A failed query logs a warning and returns an empty result for that key — it never
+    aborts the scan.
+    """
+    expiring_days = int(scanning_cfg.get("expiring_account_days", 30))
+    privileged_groups = [
+        g.strip() for g in scanning_cfg.get(
+            "privileged_groups",
+            "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
+        ).split(",")
+    ]
+    max_workers = int(scanning_cfg.get("ldap_threads", 8))
+
+    # All queries are independent — run them all in parallel
+    tasks = {
+        "users":                    lambda: collector.get_all_users(),
+        "kerberoastable":           lambda: collector.get_kerberoastable_accounts(),
+        "asreproastable":           lambda: collector.get_asreproastable_accounts(),
+        "pwd_never_expires":        lambda: collector.get_accounts_password_never_expires(),
+        "admincount_users":         lambda: collector.get_admincount_accounts(),
+        "privileged_members":       lambda: collector.get_privileged_group_members(privileged_groups),
+        "computers":                lambda: collector.get_all_computers(),
+        "domain_controllers":       lambda: collector.get_domain_controllers(),
+        "unconstrained_delegation": lambda: collector.get_unconstrained_delegation_accounts(),
+        "constrained_delegation":   lambda: collector.get_constrained_delegation_accounts(),
+        "password_policy":          lambda: collector.get_password_policy(),
+        "gpo_links":                lambda: collector.get_gpo_links(),
+        "fine_grained_policies":    lambda: collector.get_fine_grained_password_policies(),
+        "domain_info":              lambda: collector.get_domain_info(),
+        "pwd_not_required":         lambda: collector.get_password_not_required_accounts(),
+        "reversible_encryption":    lambda: collector.get_reversible_encryption_accounts(),
+        "sid_history":              lambda: collector.get_accounts_with_sid_history(),
+        "protected_users":          lambda: collector.get_protected_users_members(),
+        "description_passwords":    lambda: collector.get_users_with_description_passwords(),
+        "computers_without_laps":   lambda: collector.get_computers_without_laps(),
+        "krbtgt":                   lambda: collector.get_krbtgt_account(),
+        "trusts":                   lambda: collector.get_trust_relationships(),
+        "tombstone_lifetime":       lambda: collector.get_tombstone_lifetime(),
+        "dns_zones":                lambda: collector.get_dns_zones(),
+        "des_only_accounts":        lambda: collector.get_des_only_accounts(),
+        "expiring_accounts":        lambda: collector.get_expiring_accounts(days_ahead=expiring_days),
+        "all_groups":               lambda: collector.get_all_groups(),
+        "domain_acl":               lambda: collector.get_domain_acl(),
+    }
+
+    results = dict(_AD_DATA_DEFAULTS)  # start with safe defaults
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_key = {executor.submit(fn): key for key, fn in tasks.items()}
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            try:
+                results[key] = future.result()
+            except Exception as exc:
+                logger.warning(f"LDAP query '{key}' failed: {exc}. Using empty result.")
+
+    return results
+
+
 def run_scan(cfg: configparser.ConfigParser) -> dict:
     """
     Execute a complete AD security scan (supports multi-domain).
@@ -211,13 +287,6 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
     ldap_configs = _get_ldap_configs(cfg)
     all_ad_data = []
 
-    privileged_groups = [
-        g.strip() for g in scanning_cfg.get(
-            "privileged_groups",
-            "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
-        ).split(",")
-    ]
-
     for i, ldap_cfg in enumerate(ldap_configs):
         domain_label = ldap_cfg.get("domain", f"domain-{i+1}")
 
@@ -238,44 +307,15 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             # ── Step 2: Collect AD Data ──────────────────────────────────
             logger.info(f"Step 2/6: Collecting AD data from {domain_label}...")
 
-            ad_data = {
-                "users":                 collector.get_all_users(),
-                "kerberoastable":        collector.get_kerberoastable_accounts(),
-                "asreproastable":        collector.get_asreproastable_accounts(),
-                "pwd_never_expires":     collector.get_accounts_password_never_expires(),
-                "admincount_users":      collector.get_admincount_accounts(),
-                "privileged_members":    collector.get_privileged_group_members(privileged_groups),
-                "computers":             collector.get_all_computers(),
-                "domain_controllers":    collector.get_domain_controllers(),
-                "unconstrained_delegation": collector.get_unconstrained_delegation_accounts(),
-                "constrained_delegation":   collector.get_constrained_delegation_accounts(),
-                "password_policy":       collector.get_password_policy(),
-                "gpo_links":             collector.get_gpo_links(),
-                "fine_grained_policies": collector.get_fine_grained_password_policies(),
-                "domain_info":           collector.get_domain_info(),
-                "pwd_not_required":      collector.get_password_not_required_accounts(),
-                "reversible_encryption": collector.get_reversible_encryption_accounts(),
-                "sid_history":           collector.get_accounts_with_sid_history(),
-                "protected_users":       collector.get_protected_users_members(),
-                "description_passwords": collector.get_users_with_description_passwords(),
-                "computers_without_laps": collector.get_computers_without_laps(),
-                "krbtgt":                collector.get_krbtgt_account(),
-                "trusts":                collector.get_trust_relationships(),
-                "tombstone_lifetime":    collector.get_tombstone_lifetime(),
-                "dns_zones":             collector.get_dns_zones(),
-                "des_only_accounts":     collector.get_des_only_accounts(),
-                "expiring_accounts":     collector.get_expiring_accounts(
-                    days_ahead=int(scanning_cfg.get("expiring_account_days", 30))
-                ),
-                "_domain_label":         domain_label,
-            }
+            ad_data = _collect_ad_data(collector, scanning_cfg)
+            ad_data["_domain_label"] = domain_label
 
             logger.info(
-                f"  → Users: {len(ad_data['users'])} | "
-                f"Computers: {len(ad_data['computers'])} | "
-                f"DCs: {len(ad_data['domain_controllers'])} | "
-                f"Kerberoastable: {len(ad_data['kerberoastable'])} | "
-                f"AS-REP: {len(ad_data['asreproastable'])}"
+                f"  → Users: {len(ad_data.get('users', []))} | "
+                f"Computers: {len(ad_data.get('computers', []))} | "
+                f"DCs: {len(ad_data.get('domain_controllers', []))} | "
+                f"Kerberoastable: {len(ad_data.get('kerberoastable', []))} | "
+                f"AS-REP: {len(ad_data.get('asreproastable', []))}"
             )
             all_ad_data.append(ad_data)
 
