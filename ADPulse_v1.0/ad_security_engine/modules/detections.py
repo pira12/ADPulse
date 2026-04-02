@@ -1400,3 +1400,46 @@ class DetectionEngine:
                 "3. Check that new accounts have appropriate permissions (principle of least privilege)."
             ),
         }]
+
+    # ------------------------------------------------------------------ #
+    #  New Detections — Improvement 3                                      #
+    # ------------------------------------------------------------------ #
+
+    def detect_dcsync_rights(self, domain_acl: list, domain_controllers: list) -> list:
+        """
+        ACL-001-DCSYNC: Non-DC accounts with DCSync replication rights.
+        Any account with DS-Replication-Get-Changes-All can dump all AD hashes.
+        """
+        dc_names = {
+            str(dc.get("sAMAccountName", "")).lower().rstrip("$")
+            for dc in domain_controllers
+        }
+        flagged = [
+            entry["sam_account_name"]
+            for entry in domain_acl
+            if entry.get("sam_account_name", "").lower().rstrip("$") not in dc_names
+            and entry.get("sam_account_name")
+        ]
+        if not flagged:
+            return []
+        return [{
+            "finding_id":   "ACL-001-DCSYNC",
+            "category":     "Privileged Access",
+            "severity":     "CRITICAL",
+            "title":        f"{len(flagged)} Account(s) Have DCSync Rights",
+            "description": (
+                "The following non-DC accounts have DS-Replication-Get-Changes-All "
+                "permission on the domain root. This grants the ability to perform a "
+                "DCSync attack — extracting all password hashes from AD without "
+                "logging on to a Domain Controller."
+            ),
+            "affected":     flagged,
+            "details":      {"count": len(flagged)},
+            "remediation": (
+                "1. Remove DCSync rights from all non-DC accounts.\n"
+                "2. In ADUC: right-click domain root → Properties → Security → "
+                "   find the account → remove 'Replicating Directory Changes All'.\n"
+                "3. Investigate how this permission was granted and whether a DCSync "
+                "   attack has already occurred (check logs for mimikatz indicators)."
+            ),
+        }]
