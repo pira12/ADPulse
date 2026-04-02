@@ -1621,3 +1621,51 @@ class DetectionEngine:
                 "   access reviews straightforward."
             ),
         }]
+
+    def detect_privileged_spn(self, kerberoastable: list, privileged_members: dict) -> list:
+        """
+        KERB-003-PRIVESC-SPN: Kerberoastable accounts that are also members
+        of privileged groups. An attacker who cracks the service account hash
+        gets immediate privileged access — no lateral movement required.
+        """
+        if not kerberoastable or not privileged_members:
+            return []
+
+        # Build set of privileged member SAM-equivalent names by extracting CN from each DN
+        priv_sams = set()
+        for members in privileged_members.values():
+            for dn in members:
+                cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "").strip().lower()
+                priv_sams.add(cn)
+
+        flagged = []
+        for acct in kerberoastable:
+            sam = _account_name(acct).lower()
+            if sam in priv_sams:
+                flagged.append(_account_name(acct))
+
+        if not flagged:
+            return []
+        return [{
+            "finding_id":   "KERB-003-PRIVESC-SPN",
+            "category":     "Kerberos",
+            "severity":     "CRITICAL",
+            "title":        f"{len(flagged)} Privileged Kerberoastable Account(s)",
+            "description": (
+                f"{len(flagged)} account(s) with Service Principal Names (SPNs) are also members "
+                "of privileged groups. Any domain user can request a Kerberos service ticket for "
+                "these accounts and attempt offline password cracking. A cracked hash yields "
+                "immediate privileged access — no further exploitation required."
+            ),
+            "affected":     flagged,
+            "details":      {"count": len(flagged)},
+            "remediation": (
+                "1. Remove service accounts from privileged groups — service accounts "
+                "   should never be administrators.\n"
+                "2. If admin rights are genuinely required, use a Group Managed Service Account "
+                "   (gMSA) — these have auto-rotating 120+ character passwords.\n"
+                "3. As an interim measure, set a long random password (25+ chars) on the account.\n"
+                "4. Enable 'Require Kerberos AES encryption' on the account to prevent "
+                "   RC4-based Kerberoasting while you remediate."
+            ),
+        }]
