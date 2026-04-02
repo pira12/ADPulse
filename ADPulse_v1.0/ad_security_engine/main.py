@@ -340,11 +340,11 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         policy_path = cfg.get("policy", "policy_path", fallback="./policy.json")
         pm = PolicyManager(policy_path)
 
-        expired = pm.check_expiry()
+        pm.check_expiry()
         current_ids = {f["finding_id"] for f in findings}
         reappeared = pm.handle_resolved_reappearance(current_ids)
-        for fid in reappeared:
-            logger.warning(f"Finding {fid} was marked resolved but has reappeared.")
+        if reappeared:
+            logger.info(f"  -> Policy: {len(reappeared)} resolved finding(s) have reappeared.")
 
         findings, suppressed_findings = pm.apply_to_findings(findings)
 
@@ -529,7 +529,8 @@ def cmd_policy(cfg: configparser.ConfigParser, config_path: str,
     import os
     from modules.policy_manager import PolicyManager
 
-    policy_path = str(Path(config_path).parent / "policy.json")
+    default_path = str(Path(config_path).parent / "policy.json")
+    policy_path = cfg.get("policy", "policy_path", fallback=default_path)
     pm = PolicyManager(policy_path)
 
     if action == "list":
