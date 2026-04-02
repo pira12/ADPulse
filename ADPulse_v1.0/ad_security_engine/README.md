@@ -135,6 +135,40 @@ The task runs as your current Windows user with integrated AD authentication. No
 
 ---
 
+## 🔌 Offline / Air-Gapped Deployment
+
+For VMs with **no internet access and no Python installed** (common for read-only AD-joined VMs):
+
+### Step 1 — Build the portable package (on a machine WITH internet)
+```powershell
+cd ad_security_engine\install
+.\prepare_offline_package.ps1
+```
+This creates an `ADPulse_Portable` folder containing:
+- **Portable Python** (embeddable distribution — no installer needed)
+- **All dependency wheels** pre-installed
+- **ADPulse source code**
+- **`Run-ADPulse.bat`** — double-click to scan
+
+### Step 2 — Transfer to the air-gapped VM
+Copy the `ADPulse_Portable` folder via:
+- **RDP drive redirection** — access `\\tsclient\C\` from within the RDP session
+- **Network file share** — copy to `\\fileserver\share\`
+- Any other file transfer method your organization allows
+
+### Step 3 — Run on the VM
+```
+Double-click Run-ADPulse.bat
+```
+On first run it opens `config.ini` for you to fill in your domain controller settings. That's it — **no installation, no Python setup, no admin rights needed**.
+
+To set up recurring scans as a scheduled task:
+```
+Double-click Install-ScheduledTask.bat
+```
+
+---
+
 ## 📋 CLI Reference
 
 ```bash
@@ -162,7 +196,9 @@ ad_security_engine/
 │   ├── alerting.py                 # Email alerting
 │   └── report_generator.py        # PDF + HTML report generation
 ├── install/
-│   └── install_scheduled_task.ps1  # Installs as Windows Scheduled Task
+│   ├── install_scheduled_task.ps1  # Installs as Windows Scheduled Task
+│   ├── prepare_offline_package.ps1 # Builds offline bundle (run with internet)
+│   └── install_offline.ps1         # Installs from offline bundle (no internet)
 ├── output/                         # Generated reports (auto-created)
 └── logs/                           # Rotating log files (auto-created)
 ```

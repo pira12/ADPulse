@@ -97,9 +97,23 @@ if (-not (Test-Path $ConfigFile)) {
 # -- Install dependencies ------------------------------------------------------
 Write-Host "Installing Python dependencies..." -ForegroundColor Yellow
 $reqFile = Join-Path $InstallDir "requirements.txt"
-& $PythonPath -m pip install -r $reqFile --quiet
+
+# Check for offline wheels directory (created by prepare_offline_package.ps1)
+$OfflineWheelDir = Join-Path (Split-Path -Parent $InstallDir) "wheels"
+if (-not (Test-Path $OfflineWheelDir)) {
+    $OfflineWheelDir = Join-Path $InstallDir "wheels"
+}
+
+if (Test-Path $OfflineWheelDir) {
+    Write-Host "  Found offline wheels at $OfflineWheelDir - installing without internet." -ForegroundColor Yellow
+    & $PythonPath -m pip install --no-index --find-links $OfflineWheelDir -r $reqFile --quiet
+} else {
+    & $PythonPath -m pip install -r $reqFile --quiet
+}
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: pip install failed. Check your internet connection." -ForegroundColor Red
+    Write-Host "ERROR: pip install failed." -ForegroundColor Red
+    Write-Host "  If this VM has no internet, use prepare_offline_package.ps1 first." -ForegroundColor Yellow
+    Write-Host "  See: install\prepare_offline_package.ps1" -ForegroundColor Yellow
     exit 1
 }
 Write-Host "Dependencies installed." -ForegroundColor Green
