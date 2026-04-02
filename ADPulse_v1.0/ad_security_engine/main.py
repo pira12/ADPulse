@@ -272,6 +272,9 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
     reporter  = ReportManager(reporting_cfg)
     notifier  = OutputNotifier(reporting_cfg, output_cfg)
 
+    # Initialise suppressed_findings early to prevent NameError on early-exit paths
+    suppressed_findings = []
+
     # Load exclusions and severity overrides
     exclusion_cfg = _load_exclusions(cfg)
 
@@ -372,6 +375,25 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         baseline.save_findings(run_id, all_findings)
         findings = baseline.get_findings_for_run(run_id)
 
+        # Apply policy (accepted_risk → suppressed, in_remediation → badge, resolved → audit trail)
+        from modules.policy_manager import PolicyManager
+        policy_path = cfg.get("policy", "policy_path", fallback="./policy.json")
+        pm = PolicyManager(policy_path)
+
+        pm.check_expiry()
+        current_ids = {f["finding_id"] for f in findings}
+        reappeared = pm.handle_resolved_reappearance(current_ids)
+        if reappeared:
+            logger.info(f"  -> Policy: {len(reappeared)} resolved finding(s) have reappeared.")
+
+        findings, suppressed_findings = pm.apply_to_findings(findings)
+
+        if suppressed_findings:
+            logger.info(
+                f"  -> Policy: {len(suppressed_findings)} finding(s) suppressed "
+                f"(accepted_risk/resolved)."
+            )
+
         # Log severity breakdown
         counts = {}
         for f in findings:
@@ -390,6 +412,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             run_id=run_id,
             domain_info=primary.get("domain_info"),
             baseline=baseline,
+            suppressed=suppressed_findings,
         )
         for fmt, path in report_paths.items():
             logger.info(f"  → {fmt.upper()} report: {path}")
@@ -401,6 +424,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             run_id=run_id,
             report_paths=report_paths,
             domain_info=primary.get("domain_info"),
+            suppressed_count=len(suppressed_findings),
         )
 
         # Finalise
@@ -412,13 +436,14 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         logger.info("=" * 70)
 
         return {
-            "success":      True,
-            "run_id":       run_id,
-            "findings":     findings,
-            "findings_count": len(findings),
-            "report_paths": report_paths,
-            "elapsed_sec":  elapsed,
-            "stats":        counts,
+            "success":          True,
+            "run_id":           run_id,
+            "findings":         findings,
+            "findings_count":   len(findings),
+            "suppressed_count": len(suppressed_findings),
+            "report_paths":     report_paths,
+            "elapsed_sec":      elapsed,
+            "stats":            counts,
         }
 
     except Exception as e:
@@ -538,6 +563,83 @@ def cmd_daemon(cfg: configparser.ConfigParser):
         time.sleep(interval_sec)
 
 
+def cmd_policy(cfg: configparser.ConfigParser, config_path: str,
+               action: str, finding_id: str, reason: str, expires: str):
+    """Handle --policy subcommands."""
+    import os
+    from modules.policy_manager import PolicyManager
+
+    default_path = str(Path(config_path).parent / "policy.json")
+    policy_path = cfg.get("policy", "policy_path", fallback=default_path)
+    pm = PolicyManager(policy_path)
+
+    if action == "list":
+        entries = pm.list_all()
+        if not entries:
+            print("\n  No policy entries.\n")
+            return
+        print(f"\n  {'Finding ID':<32} {'Status':<16} {'Set By':<12} {'Expires':<12} Reason")
+        print("  " + "-" * 90)
+        for e in entries:
+            exp = e.get("expires") or "none"
+            expired_tag = " [EXPIRED]" if e.get("expired") else ""
+            print(f"  {e['finding_id']:<32} {e['status']:<16} {e.get('set_by',''):<12} "
+                  f"{exp:<12} {e.get('reason','')}{expired_tag}")
+        print()
+        return
+
+    if not finding_id:
+        print(f"ERROR: '--policy {action}' requires a finding ID.")
+        print(f"  Example: python main.py --policy {action} KERB-001-STANDARD --reason \"...\"")
+        sys.exit(1)
+
+    # Validate finding_id against last scan
+    db_path = cfg["database"].get("db_path", "./ad_baseline.db")
+    from modules.baseline_engine import BaselineEngine
+    baseline = BaselineEngine(db_path)
+    last_run = baseline.get_last_successful_run_id()
+    if last_run:
+        known_ids = {f["finding_id"] for f in baseline.get_findings_for_run(last_run)}
+        existing_ids = {e["finding_id"] for e in pm.list_all()}
+        all_known = known_ids | existing_ids
+        if finding_id not in all_known:
+            print(f"ERROR: Finding ID '{finding_id}' not found in last scan or policy file.")
+            print("  Run 'python main.py --policy list' to see existing entries.")
+            print("  Run 'python main.py --report-only' to see current findings.")
+            sys.exit(1)
+
+    set_by = os.environ.get("USERNAME", os.environ.get("USER", ""))
+
+    if action == "accept":
+        if not reason:
+            print("ERROR: --reason is required for 'accept'.")
+            sys.exit(1)
+        pm.set_status(finding_id, "accepted_risk", reason, set_by, expires or None)
+        msg = f"  [OK] {finding_id} -> accepted_risk"
+        if expires:
+            msg += f" (expires {expires})"
+        print(msg)
+
+    elif action == "remediate":
+        if not reason:
+            print("ERROR: --reason is required for 'remediate'.")
+            sys.exit(1)
+        pm.set_status(finding_id, "in_remediation", reason, set_by, None)
+        print(f"  [OK] {finding_id} -> in_remediation")
+
+    elif action == "resolve":
+        pm.set_status(finding_id, "resolved", reason or "Manually resolved", set_by, None)
+        print(f"  [OK] {finding_id} -> resolved")
+
+    elif action == "clear":
+        pm.clear(finding_id)
+        print(f"  [OK] Policy entry for {finding_id} removed.")
+
+    else:
+        print(f"ERROR: Unknown action '{action}'. Valid: list, accept, remediate, resolve, clear")
+        sys.exit(1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Entry Point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -580,6 +682,22 @@ Examples:
         "--diff", action="store_true",
         help="Show what changed between the last two scans",
     )
+    parser.add_argument(
+        "--policy", nargs="+", metavar=("ACTION", "FINDING_ID"),
+        help=(
+            "Manage finding policy. Actions:\n"
+            "  list                             List all policy entries\n"
+            "  accept  <FINDING_ID> --reason    Mark as accepted risk\n"
+            "  remediate <FINDING_ID> --reason  Mark as in remediation\n"
+            "  resolve <FINDING_ID>             Mark as resolved\n"
+            "  clear   <FINDING_ID>             Remove policy entry"
+        ),
+    )
+    parser.add_argument("--reason", default="", help="Reason for policy decision")
+    parser.add_argument(
+        "--expires", default=None,
+        help="Expiry date for accepted_risk entries (YYYY-MM-DD)"
+    )
 
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -600,6 +718,12 @@ Examples:
 ╚══════════════════════════════════════════════════════════════════╝
 """)
 
+    if args.policy:
+        action     = args.policy[0]
+        finding_id = args.policy[1] if len(args.policy) > 1 else ""
+        cmd_policy(cfg, args.config, action, finding_id, args.reason, args.expires)
+        return
+
     if args.test_connection:
         cmd_test_connection(cfg)
     elif args.report_only:
@@ -618,6 +742,8 @@ Examples:
 
         print(f"\n✅ Scan complete in {result['elapsed_sec']:.1f}s")
         print(f"   Findings: {result['findings_count']}")
+        if result.get("suppressed_count", 0):
+            print(f"   Suppressed (policy): {result['suppressed_count']}")
         for fmt, path in result.get("report_paths", {}).items():
             print(f"   {fmt.upper()} Report: {path}")
         print()

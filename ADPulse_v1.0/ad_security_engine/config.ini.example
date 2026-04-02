@@ -165,3 +165,7 @@ log_backup_count = 5
 # [severity_overrides]
 # DELEG-002-CONSTRAINED = HIGH
 # COMP-001-STALE = MEDIUM
+
+# [policy]
+# Path to the finding policy file (default: ./policy.json, relative to config.ini)
+# policy_path = ./policy.json
