@@ -46,3 +46,36 @@ def test_dcsync_ignores_dc_accounts():
 def test_dcsync_empty_acl():
     """Empty domain ACL produces no findings."""
     assert engine.detect_dcsync_rights([], SAMPLE_DOMAIN_CONTROLLERS) == []
+
+
+# ── Dormant Privileged Accounts ──────────────────────────────────────────────
+
+def test_dormant_admin_flagged():
+    """A privileged account inactive for >90 days should be flagged."""
+    users = [
+        make_user("admin1", last_logon_days_ago=95),   # dormant
+        make_user("admin2", last_logon_days_ago=10),   # active
+    ]
+    # admin1 is in Domain Admins
+    priv = {"Domain Admins": ["CN=admin1,OU=Users,DC=corp,DC=local"]}
+
+    findings = engine.detect_dormant_privileged_accounts(users, priv)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "HIGH"
+    assert findings[0]["finding_id"] == "PRIV-001-DORMANT-ADMIN"
+    assert "admin1" in findings[0]["affected"]
+    assert "admin2" not in findings[0]["affected"]
+
+
+def test_active_admin_not_flagged():
+    """A recently active privileged account must not be flagged."""
+    users = [make_user("admin1", last_logon_days_ago=5)]
+    priv = {"Domain Admins": ["CN=admin1,OU=Users,DC=corp,DC=local"]}
+    assert engine.detect_dormant_privileged_accounts(users, priv) == []
+
+
+def test_dormant_non_admin_not_flagged():
+    """A dormant account that is not privileged must not be flagged."""
+    users = [make_user("jsmith", last_logon_days_ago=200)]
+    priv = {"Domain Admins": []}  # jsmith not in any privileged group
+    assert engine.detect_dormant_privileged_accounts(users, priv) == []
