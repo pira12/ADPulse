@@ -18,6 +18,16 @@ use_ssl = false
 # Connection timeout in seconds
 timeout = 30
 
+# ── Multi-Domain Support ──────────────────────────────────────────────
+# To scan additional domains, add numbered sections:
+# [ldap.2]
+# server = dc01.other.local
+# domain = other.local
+# username = svc-secmonitor
+# password = YourPasswordHere
+# port = 636
+# use_ssl = true
+
 [scanning]
 # How often to run a full scan (in hours)
 scan_interval_hours = 6
@@ -27,6 +37,9 @@ stale_account_days = 60
 
 # Days since password last set before flagging (0 = disable)
 password_age_days = 365
+
+# Days ahead to check for expiring accounts
+expiring_account_days = 30
 
 # Privileged groups to monitor for membership changes (comma-separated)
 privileged_groups = Domain Admins,Enterprise Admins,Schema Admins,Administrators,Account Operators,Backup Operators,Group Policy Creator Owners
@@ -42,6 +55,33 @@ min_summary_severity = MEDIUM
 # Requires: pip install pywin32
 write_windows_eventlog = false
 
+# ── Webhook Notifications ─────────────────────────────────────────────
+# Send scan results to a webhook URL (e.g., Slack, Teams, custom endpoint)
+# Leave blank to disable
+webhook_url =
+
+# Minimum severity to trigger webhook notification
+webhook_min_severity = HIGH
+
+# ── Syslog Output ─────────────────────────────────────────────────────
+# Send findings to a syslog server (UDP)
+# Leave blank to disable
+syslog_server =
+syslog_port = 514
+
+# ── Email Notifications ───────────────────────────────────────────────
+# SMTP settings for email delivery of reports
+email_enabled = false
+smtp_server =
+smtp_port = 587
+smtp_use_tls = true
+smtp_username =
+smtp_password =
+email_from = adpulse@company.local
+email_to = security-team@company.local
+# Minimum severity to trigger email (LOW, MEDIUM, HIGH, CRITICAL)
+email_min_severity = HIGH
+
 [reporting]
 # Output directory for reports
 output_dir = ./output
@@ -52,6 +92,12 @@ generate_pdf = true
 # Generate HTML report
 generate_html = true
 
+# Generate CSV export (for spreadsheet analysis)
+generate_csv = true
+
+# Generate trend dashboard (HTML page with historical charts)
+generate_trend_dashboard = true
+
 # Company name shown on reports
 company_name = Your Company
 
@@ -61,6 +107,9 @@ logo_path =
 [database]
 # SQLite database path for storing baselines
 db_path = ./ad_baseline.db
+
+# Number of days to retain scan history (0 = keep forever)
+retention_days = 365
 
 [logging]
 # Log file path
@@ -74,3 +123,25 @@ max_log_size_mb = 10
 
 # Number of backup log files to keep
 log_backup_count = 5
+
+# ── Exclusions ────────────────────────────────────────────────────────
+# Suppress specific findings or affected objects from reports.
+# Use finding IDs (e.g., KERB-001-STANDARD) or account names.
+#
+# [exclusions]
+# # Suppress entire finding IDs (comma-separated)
+# finding_ids = KERB-001-STANDARD,ACCT-001-STALE
+#
+# # Suppress specific accounts from affected lists (comma-separated)
+# accounts = svc-legacy-app,svc-old-system
+#
+# # Reason for exclusions (shown in reports for audit trail)
+# reason = Accepted risk per security review 2026-01-15
+
+# ── Severity Overrides ────────────────────────────────────────────────
+# Override the default severity for specific finding IDs.
+# Format: finding_id = NEW_SEVERITY
+#
+# [severity_overrides]
+# DELEG-002-CONSTRAINED = HIGH
+# COMP-001-STALE = MEDIUM

@@ -503,7 +503,7 @@ class LDAPCollector:
         return results
 
     # ------------------------------------------------------------------ #
-    #  Domain Info                                                         #
+    #  Domain Info & Configuration Queries                                 #
     # ------------------------------------------------------------------ #
 
     def get_domain_info(self) -> dict:
@@ -520,6 +520,130 @@ class LDAPCollector:
             info["server"] = self.server_host
             return info
         return {"base_dn": self.base_dn, "server": self.server_host}
+
+    def get_krbtgt_account(self) -> Optional[dict]:
+        """
+        Get the krbtgt account — the Kerberos ticket-granting service account.
+        Its password age is a critical security indicator.
+        """
+        attrs = [
+            "sAMAccountName", "pwdLastSet", "whenChanged",
+            "whenCreated", "distinguishedName",
+        ]
+        results = self._search(
+            "(&(objectClass=user)(sAMAccountName=krbtgt))", attrs
+        )
+        if results:
+            logger.info("Retrieved krbtgt account info.")
+            return results[0]
+        logger.warning("krbtgt account not found.")
+        return None
+
+    def get_trust_relationships(self) -> list:
+        """
+        Enumerate domain trust relationships.
+        Readable by any authenticated domain user.
+        """
+        attrs = [
+            "cn", "trustPartner", "trustDirection", "trustType",
+            "trustAttributes", "whenCreated", "whenChanged",
+            "flatName", "distinguishedName",
+        ]
+        results = self._search("(objectClass=trustedDomain)", attrs)
+        logger.info(f"Found {len(results)} trust relationships.")
+        return results
+
+    def get_tombstone_lifetime(self) -> Optional[int]:
+        """
+        Get the tombstone lifetime for the forest.
+        Read from CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration.
+        """
+        config_dn = f"CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration,{self.base_dn}"
+        results = self._search(
+            "(objectClass=nTDSService)",
+            ["tombstoneLifetime"],
+            search_base=config_dn,
+        )
+        if results and results[0].get("tombstoneLifetime") is not None:
+            val = results[0]["tombstoneLifetime"]
+            try:
+                lifetime = int(val)
+                logger.info(f"Tombstone lifetime: {lifetime} days.")
+                return lifetime
+            except (TypeError, ValueError):
+                pass
+        logger.debug("Could not retrieve tombstone lifetime.")
+        return None
+
+    def get_dns_zones(self) -> list:
+        """
+        Enumerate DNS zones stored in AD.
+        Readable by any authenticated domain user.
+        """
+        dns_base = f"CN=MicrosoftDNS,DC=DomainDnsZones,{self.base_dn}"
+        attrs = [
+            "dc", "name", "distinguishedName", "whenCreated",
+        ]
+        results = self._search(
+            "(objectClass=dnsZone)", attrs, search_base=dns_base
+        )
+        # Fallback to forest DNS partition
+        if not results:
+            dns_base = f"CN=MicrosoftDNS,DC=ForestDnsZones,{self.base_dn}"
+            results = self._search(
+                "(objectClass=dnsZone)", attrs, search_base=dns_base
+            )
+        logger.info(f"Found {len(results)} DNS zones.")
+        return results
+
+    def get_des_only_accounts(self) -> list:
+        """
+        Accounts with USE_DES_KEY_ONLY flag (UAC 0x200000).
+        DES encryption is trivially breakable.
+        """
+        attrs = [
+            "sAMAccountName", "displayName", "userAccountControl",
+            "adminCount", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(userAccountControl:1.2.840.113556.1.4.803:=2097152)"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        logger.info(f"Found {len(results)} accounts with DES-only encryption.")
+        return results
+
+    def get_expiring_accounts(self, days_ahead: int = 30) -> list:
+        """
+        Find accounts expiring within the specified number of days.
+        Uses the accountExpires attribute (Windows FILETIME format).
+        """
+        # We fetch all users with accountExpires set and filter in Python
+        # because LDAP range filters on large integers are complex
+        attrs = [
+            "sAMAccountName", "displayName", "accountExpires",
+            "userAccountControl", "distinguishedName",
+        ]
+        search_filter = (
+            "(&(objectCategory=person)(objectClass=user)"
+            "(accountExpires>=1)(!(accountExpires=9223372036854775807))"
+            "(!(userAccountControl:1.2.840.113556.1.4.803:=2)))"
+        )
+        results = self._search(search_filter, attrs)
+        # Filter to only accounts expiring within the window
+        expiring = []
+        now = datetime.now(tz=timezone.utc)
+        for r in results:
+            exp = r.get("accountExpires")
+            if exp:
+                dt = filetime_to_datetime(int(exp)) if isinstance(exp, (int, str)) else None
+                if dt and dt > now and (dt - now).days <= days_ahead:
+                    r["_expires_dt"] = dt.isoformat()
+                    r["_expires_days"] = (dt - now).days
+                    expiring.append(r)
+        logger.info(f"Found {len(expiring)} accounts expiring within {days_ahead} days.")
+        return expiring
 
     def test_connection(self) -> dict:
         """Test connectivity and return server info."""

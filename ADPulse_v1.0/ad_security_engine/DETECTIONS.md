@@ -1,6 +1,6 @@
 # ADPulse Detection Catalog
 
-Complete reference of all security detections performed by ADPulse.
+Complete reference of all 26+ security detections performed by ADPulse.
 All detections use **read-only LDAP queries** and require only **standard Domain User** privileges.
 
 ---
@@ -37,6 +37,15 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 | DELTA-PRIV-ADD-* | Privileged Access Changes | CRITICAL | New Members Added to Privileged Group |
 | DELTA-PRIV-REM-* | Privileged Access Changes | MEDIUM | Members Removed from Privileged Group |
 | DELTA-ACCT-NEW | Account Changes | INFO | New User Accounts Created |
+| KERB-003-KRBTGT-AGE | Kerberos | CRITICAL/HIGH | KRBTGT Password Not Rotated (>180 days) |
+| KERB-004-DUPLICATE-SPN | Kerberos | MEDIUM | Duplicate Service Principal Names |
+| KERB-005-DES-ONLY | Kerberos | HIGH | Accounts Using DES-Only Encryption |
+| TRUST-001-NO-SID-FILTER | Domain Configuration | HIGH | Trust Relationships Without SID Filtering |
+| TRUST-002-INVENTORY | Domain Configuration | INFO | Trust Relationship Inventory |
+| CONF-003-TOMBSTONE | Domain Configuration | HIGH/MEDIUM | Short Tombstone Lifetime |
+| ACCT-002-EXPIRING | Account Hygiene | INFO | Accounts Expiring Soon |
+| POL-006-FGPP-NO-TARGETS | Password Policy | MEDIUM | FGPPs With No Targets |
+| POL-007-FGPP-PRIV-GAP | Password Policy | MEDIUM | Privileged Groups Not Covered by FGPP |
 
 ---
 
@@ -85,6 +94,51 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 **Severity Logic:**
 - `CRITICAL` — Any affected account has `adminCount=1`
 - `HIGH` — All affected accounts are standard users
+
+---
+
+#### KERB-003 — KRBTGT Password Age
+
+**What it detects:** The KRBTGT account password has not been rotated in over 180 days.
+
+**Why it matters:** The KRBTGT account is used to sign all Kerberos TGTs in the domain. If an attacker obtains the KRBTGT hash, they can forge Golden Tickets granting unrestricted domain access. Regular rotation limits the window of exposure. Microsoft recommends rotating the KRBTGT password at least every 180 days.
+
+**Severity Logic:**
+- `CRITICAL` — Password age exceeds 365 days
+- `HIGH` — Password age exceeds 180 days
+
+**Remediation:**
+1. Rotate the KRBTGT password twice (with a 12+ hour gap between rotations to allow replication)
+2. Establish a recurring rotation schedule (at least every 180 days)
+
+---
+
+#### KERB-004 — Duplicate Service Principal Names
+
+**What it detects:** Multiple accounts that share the same Service Principal Name (SPN).
+
+**Why it matters:** Duplicate SPNs cause Kerberos authentication failures for the affected services. They can also indicate misconfiguration or unauthorized SPN registration by an attacker preparing for Kerberoasting or lateral movement.
+
+**Severity:** `MEDIUM`
+
+**Remediation:**
+1. Identify and remove duplicate SPN assignments using `setspn -X` across the forest
+2. Consolidate SPNs to the correct service accounts
+
+---
+
+#### KERB-005 — DES-Only Encryption Accounts
+
+**What it detects:** Accounts configured to use DES-only Kerberos encryption (UAC flag `0x200000`).
+
+**Why it matters:** DES encryption is cryptographically broken and can be cracked trivially. Accounts restricted to DES-only encryption expose their Kerberos tickets to rapid offline attacks. Modern environments should enforce AES256.
+
+**Severity:** `HIGH`
+
+**Remediation:**
+1. Remove the `USE_DES_KEY_ONLY` flag from affected accounts
+2. Ensure AES Kerberos encryption is enabled on all accounts
+3. Update any legacy applications that require DES
 
 ---
 
@@ -169,6 +223,16 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 **Severity Logic:**
 - `HIGH` — Inactive for 2x the threshold (very stale)
 - `MEDIUM` — Inactive for 1x the threshold
+
+---
+
+#### ACCT-002 — Accounts Expiring Soon
+
+**What it detects:** User accounts with an `accountExpires` date within the near future (configurable, default 30 days).
+
+**Why it matters:** Provides operational awareness of accounts that will soon expire. Useful for proactive account lifecycle management and avoiding unexpected service disruptions from expired service or contractor accounts.
+
+**Severity:** `INFO` (informational — review for planned expirations)
 
 ---
 

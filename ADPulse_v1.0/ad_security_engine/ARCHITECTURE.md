@@ -2,7 +2,7 @@
 
 ## Overview
 
-ADPulse is a lightweight, automated, **read-only** Active Directory security monitoring tool. It connects to AD using standard domain user credentials (no admin rights), collects security-relevant data via LDAP, detects misconfigurations and vulnerabilities, tracks drift between scans, and generates professional reports.
+ADPulse is a lightweight, automated, **read-only** Active Directory security monitoring tool. It connects to one or more AD domains using standard domain user credentials (no admin rights), collects security-relevant data via LDAP, detects misconfigurations and vulnerabilities, tracks drift between scans, and generates professional reports. Multi-domain support allows a single ADPulse instance to monitor multiple domains and forest trusts from a centralized configuration.
 
 **Core Design Principles:**
 - Zero admin rights required (standard Domain User)
@@ -10,6 +10,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - No network listeners — only outbound LDAP connections
 - Local-only data storage (SQLite)
 - No email server dependency
+- Configurable exclusion lists and severity overrides per finding
 
 ---
 
@@ -30,9 +31,9 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
    │ LDAPCollector    │ │ BaselineEngine│ │ DetectionEngine  │
    │ ldap_collector.py│ │ baseline_     │ │ detections.py    │
    │                  │ │ engine.py     │ │                  │
-   │ Connects to AD   │ │ SQLite DB     │ │ 18+ security     │
+   │ Connects to AD   │ │ SQLite DB     │ │ 26+ security     │
    │ via LDAP/NTLM.   │ │ management.   │ │ detectors.       │
-   │ ~20 read-only    │ │ Stores        │ │ Point-in-time &  │
+   │ ~26 read-only    │ │ Stores        │ │ Point-in-time &  │
    │ query methods.   │ │ snapshots &   │ │ delta-based      │
    │ Zero writes.     │ │ detects drift │ │ analysis.        │
    └────────┬─────────┘ └───────┬───────┘ └────────┬─────────┘

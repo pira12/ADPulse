@@ -14,7 +14,7 @@
 
 ## What is ADPulse?
 
-ADPulse continuously monitors your Active Directory environment for security misconfigurations, attack paths, and drift - **without requiring admin rights**. It connects via standard LDAP (readable by any authenticated domain user), detects 18+ security issues, tracks changes between scans, and generates professional reports.
+ADPulse continuously monitors your Active Directory environment for security misconfigurations, attack paths, and drift - **without requiring admin rights**. It connects via standard LDAP (readable by any authenticated domain user), detects 26+ security issues, tracks changes between scans, and generates professional reports.
 
 ### Why ADPulse?
 
@@ -25,10 +25,19 @@ ADPulse continuously monitors your Active Directory environment for security mis
 - **Automated drift detection** - Tracks changes between scans (new admin group members, new accounts).
 - **Interactive HTML reports** - Filter by severity, search findings, collapse/expand cards.
 - **SIEM-ready** - JSON export and optional Windows Event Log integration.
+- **Multi-domain support** - Scan multiple AD domains in one run.
+- **Exclusion lists** - Suppress accepted-risk findings so reports stay actionable.
+- **Severity overrides** - Customize finding priorities to match your organization's risk model.
+- **CSV export** - Export findings to CSV for spreadsheet analysis.
+- **Email notification** - Send scan results with PDF attachment via SMTP.
+- **Webhook/syslog integration** - Push alerts to Slack, Teams, or any SIEM via webhook or syslog.
+- **Trend dashboard** - Historical risk score charts in a standalone HTML dashboard.
+- **Finding diff (`--diff`)** - See exactly what changed between two scans.
+- **Database retention auto-cleanup** - Automatically purge old scan data based on configurable retention policy.
 
 ---
 
-## Security Detections (18+)
+## Security Detections (26+)
 
 ### Kerberos Attack Paths
 | Detection | Severity | Description |
@@ -63,6 +72,16 @@ ADPulse continuously monitors your Active Directory environment for security mis
 | Computers Without LAPS | HIGH/MEDIUM | Shared local admin passwords across machines |
 | End-of-Life Operating Systems | CRITICAL-MEDIUM | Unsupported OS (XP, 7, Server 2003/2008/2012) |
 | Weak Password Policy | HIGH/MEDIUM | Short minimum length, low history |
+
+### Kerberos & Trust Infrastructure
+| Detection | Severity | Description |
+|---|---|---|
+| KRBTGT Password Age | CRITICAL/HIGH | Stale KRBTGT key enables Golden Ticket persistence |
+| Trust Relationships without SID Filtering | HIGH | Cross-forest trusts missing SID filtering allow privilege escalation |
+| Duplicate SPNs | MEDIUM | Duplicate Service Principal Names cause authentication failures and audit blind spots |
+| DES-Only Encryption | HIGH | Accounts restricted to weak DES encryption |
+| Tombstone Lifetime | HIGH/MEDIUM | Non-default tombstone lifetime affects AD recovery and replication hygiene |
+| FGPP Coverage Gaps | MEDIUM | Privileged accounts not covered by Fine-Grained Password Policies |
 
 See [DETECTIONS.md](ADPulse_v1.0/ad_security_engine/DETECTIONS.md) for the complete detection catalog with LDAP queries, severity logic, and remediation steps.
 
@@ -125,7 +144,7 @@ python main.py --daemon         # Run continuously (every 6 hours)
 
 ## Output & Reports
 
-Each scan generates four output files:
+Each scan generates six output files:
 
 | File | Format | Purpose |
 |---|---|---|
@@ -133,6 +152,8 @@ Each scan generates four output files:
 | `ADPulse_Report_*.pdf` | Branded PDF | Professional report for management and auditors |
 | `ADPulse_Summary_*.txt` | Plain text | Copy-paste into Teams, email, or tickets |
 | `ADPulse_Export_*.json` | JSON | SIEM ingestion, automation, ticketing integration |
+| `ADPulse_Export_*.csv` | CSV | Spreadsheet analysis, pivot tables, data import |
+| `ADPulse_Trend_Dashboard.html` | Interactive HTML | Historical risk score charts and trend visualization |
 
 ### Interactive HTML Report Features
 - **Click severity cards** to filter findings by severity level

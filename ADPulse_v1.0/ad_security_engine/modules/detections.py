@@ -144,6 +144,18 @@ class DetectionEngine:
             ad_data.get("computers", []),
         )
 
+        # Extended security detections
+        findings += self.detect_krbtgt_password_age(ad_data.get("krbtgt"))
+        findings += self.detect_trust_relationships(ad_data.get("trusts", []))
+        findings += self.detect_duplicate_spns(ad_data.get("kerberoastable", []))
+        findings += self.detect_des_only_encryption(ad_data.get("des_only_accounts", []))
+        findings += self.detect_tombstone_lifetime(ad_data.get("tombstone_lifetime"))
+        findings += self.detect_expiring_accounts(ad_data.get("expiring_accounts", []))
+        findings += self.detect_fgpp_coverage_gaps(
+            ad_data.get("fine_grained_policies", []),
+            ad_data.get("privileged_members", {}),
+        )
+
         # Delta-based detections (require a baseline)
         if baseline and previous_run_id:
             findings += self.detect_privileged_group_changes(
@@ -947,6 +959,350 @@ class DetectionEngine:
                 "2. Ensure the LAPS GPO is linked to all relevant OUs.\n"
                 "3. Verify LAPS schema extensions are installed in AD.\n"
                 "4. Audit local admin password reuse across your environment."
+            ),
+        }]
+
+    # ------------------------------------------------------------------ #
+    #  Extended Security Detections                                        #
+    # ------------------------------------------------------------------ #
+
+    def detect_krbtgt_password_age(self, krbtgt: Optional[dict]) -> list:
+        """
+        Check the age of the krbtgt account password.
+        Should be rotated at least every 180 days. Stale krbtgt passwords
+        mean Golden Ticket attacks remain viable indefinitely.
+        """
+        if not krbtgt:
+            return []
+
+        pwd_last_set = _to_datetime(krbtgt.get("pwdLastSet"))
+        days = _days_since(pwd_last_set)
+
+        if days is None:
+            return []
+
+        if days < 180:
+            return []
+
+        severity = "CRITICAL" if days >= 365 else "HIGH"
+
+        return [{
+            "finding_id": "KERB-003-KRBTGT-AGE",
+            "category": "Kerberos",
+            "severity": severity,
+            "title": f"KRBTGT Password Not Rotated ({days} days old)",
+            "description": (
+                f"The krbtgt account password was last set {days} days ago. "
+                "The krbtgt account is used to encrypt all Kerberos tickets (TGTs) in the domain. "
+                "If an attacker obtains the krbtgt hash (via DCSync or ntds.dit extraction), "
+                "they can forge Golden Tickets granting Domain Admin access. The only mitigation "
+                "is rotating the krbtgt password — which invalidates existing Golden Tickets."
+            ),
+            "affected": [f"krbtgt (password age: {days} days)"],
+            "details": {"password_age_days": days, "recommended_max_days": 180},
+            "remediation": (
+                "1. Rotate the krbtgt password TWICE (the second rotation invalidates the previous hash).\n"
+                "2. Wait for AD replication to complete between rotations.\n"
+                "3. Use the Microsoft krbtgt reset script or: Set-ADAccountPassword -Identity krbtgt.\n"
+                "4. Implement a policy to rotate krbtgt every 90-180 days.\n"
+                "5. Monitor for Event ID 4769 with krbtgt to detect Golden Ticket usage."
+            ),
+        }]
+
+    def detect_trust_relationships(self, trusts: list) -> list:
+        """
+        Enumerate and flag domain trust relationships for security review.
+        """
+        if not trusts:
+            return []
+
+        findings = []
+        trust_names = []
+
+        for t in trusts:
+            partner = t.get("trustPartner") or t.get("cn") or "Unknown"
+            direction = t.get("trustDirection")
+            trust_type = t.get("trustType")
+            attrs = t.get("trustAttributes") or 0
+
+            try:
+                direction = int(direction or 0)
+                trust_type = int(trust_type or 0)
+                attrs = int(attrs or 0)
+            except (TypeError, ValueError):
+                direction = trust_type = attrs = 0
+
+            dir_label = {0: "Disabled", 1: "Inbound", 2: "Outbound", 3: "Bidirectional"}.get(direction, "Unknown")
+            type_label = {1: "Downlevel (NT4)", 2: "Uplevel (AD)", 3: "MIT Kerberos", 4: "DCE"}.get(trust_type, "Unknown")
+
+            # SID filtering disabled = higher risk
+            sid_filtering = bool(attrs & 0x4)  # TRUST_ATTRIBUTE_QUARANTINED_DOMAIN
+            selective_auth = bool(attrs & 0x20)  # TRUST_ATTRIBUTE_CROSS_ORGANIZATION_ENABLE_TGT_DELEGATION
+
+            label = f"{partner} ({dir_label}, {type_label})"
+            if not sid_filtering:
+                label += " [SID Filtering OFF]"
+            trust_names.append(label)
+
+        # Flag trusts without SID filtering as higher severity
+        no_sid_filter = [t for t in trust_names if "SID Filtering OFF" in t]
+
+        if no_sid_filter:
+            findings.append({
+                "finding_id": "TRUST-001-NO-SID-FILTER",
+                "category": "Domain Configuration",
+                "severity": "HIGH",
+                "title": f"Trust Relationships Without SID Filtering ({len(no_sid_filter)})",
+                "description": (
+                    f"{len(no_sid_filter)} domain trust(s) do not have SID Filtering enabled. "
+                    "Without SID Filtering, users from trusted domains can inject arbitrary SIDs "
+                    "(including Enterprise Admins) into their Kerberos tickets, enabling cross-domain "
+                    "privilege escalation."
+                ),
+                "affected": no_sid_filter,
+                "details": {"count": len(no_sid_filter), "total_trusts": len(trusts)},
+                "remediation": (
+                    "1. Enable SID Filtering on all external trusts: netdom trust /quarantine:yes.\n"
+                    "2. Use Selective Authentication to restrict which users can authenticate.\n"
+                    "3. Audit trust relationships regularly and remove unnecessary trusts.\n"
+                    "4. Monitor for cross-domain authentication anomalies."
+                ),
+            })
+
+        if trusts:
+            findings.append({
+                "finding_id": "TRUST-002-INVENTORY",
+                "category": "Domain Configuration",
+                "severity": "INFO",
+                "title": f"Domain Trust Relationships ({len(trusts)} total)",
+                "description": (
+                    f"The domain has {len(trusts)} trust relationship(s). "
+                    "Trust relationships expand the authentication boundary and should be "
+                    "reviewed periodically to ensure they are still required."
+                ),
+                "affected": trust_names,
+                "details": {"count": len(trusts)},
+                "remediation": (
+                    "1. Review each trust to confirm it is still business-required.\n"
+                    "2. Remove unnecessary or legacy trusts.\n"
+                    "3. Ensure Selective Authentication is used where possible.\n"
+                    "4. Document the purpose of each trust relationship."
+                ),
+            })
+
+        return findings
+
+    def detect_duplicate_spns(self, kerberoastable: list) -> list:
+        """
+        Detect duplicate SPNs across accounts — causes Kerberos auth failures
+        and can be exploited for SPN hijacking.
+        """
+        spn_map = {}
+        for acct in kerberoastable:
+            spns = acct.get("servicePrincipalName")
+            if not spns:
+                continue
+            if isinstance(spns, str):
+                spns = [spns]
+            elif not isinstance(spns, list):
+                continue
+            name = _account_name(acct)
+            for spn in spns:
+                spn_lower = str(spn).lower()
+                spn_map.setdefault(spn_lower, []).append(name)
+
+        duplicates = {spn: owners for spn, owners in spn_map.items() if len(owners) > 1}
+
+        if not duplicates:
+            return []
+
+        affected = [f"{spn} -> [{', '.join(owners)}]" for spn, owners in duplicates.items()]
+
+        return [{
+            "finding_id": "KERB-004-DUPLICATE-SPN",
+            "category": "Kerberos",
+            "severity": "MEDIUM",
+            "title": f"Duplicate Service Principal Names ({len(duplicates)} conflicts)",
+            "description": (
+                f"{len(duplicates)} SPN(s) are registered on multiple accounts. "
+                "Duplicate SPNs cause Kerberos authentication failures and can be "
+                "exploited for SPN hijacking — an attacker could register a duplicate "
+                "SPN on an account they control to intercept service tickets."
+            ),
+            "affected": affected[:20],
+            "details": {"duplicate_count": len(duplicates)},
+            "remediation": (
+                "1. Identify which account should legitimately own each SPN.\n"
+                "2. Remove the duplicate SPN from the incorrect account: setspn -D.\n"
+                "3. Verify services still function correctly after cleanup.\n"
+                "4. Use 'setspn -X' to scan for duplicates across the forest."
+            ),
+        }]
+
+    def detect_des_only_encryption(self, accounts: list) -> list:
+        """DES-only Kerberos encryption — trivially breakable."""
+        if not accounts:
+            return []
+
+        names = [_account_name(a) for a in accounts]
+
+        return [{
+            "finding_id": "KERB-005-DES-ONLY",
+            "category": "Kerberos",
+            "severity": "HIGH",
+            "title": f"Accounts Using DES-Only Kerberos Encryption ({len(accounts)})",
+            "description": (
+                f"{len(accounts)} account(s) are configured to use DES-only Kerberos encryption. "
+                "DES is a deprecated cipher that can be broken in seconds with modern hardware. "
+                "This is typically a leftover from very old service configurations."
+            ),
+            "affected": names,
+            "details": {"count": len(accounts)},
+            "remediation": (
+                "1. Remove the USE_DES_KEY_ONLY flag from all affected accounts.\n"
+                "2. Enable AES128 and AES256 Kerberos encryption types.\n"
+                "3. Test affected services to ensure they support modern encryption.\n"
+                "4. Disable DES encryption at the domain level via Group Policy."
+            ),
+        }]
+
+    def detect_tombstone_lifetime(self, lifetime: Optional[int]) -> list:
+        """
+        Check if tombstone lifetime is too short for effective AD Recycle Bin.
+        Default is 60 days; recommended is 180+ for recoverability.
+        """
+        if lifetime is None:
+            return []
+
+        if lifetime >= 180:
+            return []
+
+        severity = "MEDIUM" if lifetime >= 60 else "HIGH"
+
+        return [{
+            "finding_id": "CONF-003-TOMBSTONE",
+            "category": "Domain Configuration",
+            "severity": severity,
+            "title": f"Short Tombstone Lifetime ({lifetime} days)",
+            "description": (
+                f"The AD tombstone lifetime is set to {lifetime} days. "
+                "This determines how long deleted objects can be recovered using the "
+                "AD Recycle Bin. A short tombstone lifetime means deleted objects "
+                "(including accidentally deleted OUs, users, and groups) become "
+                "permanently unrecoverable sooner. It also affects backup viability."
+            ),
+            "affected": [f"Forest tombstone lifetime: {lifetime} days"],
+            "details": {"current_days": lifetime, "recommended_days": 180},
+            "remediation": (
+                "1. Increase tombstone lifetime to 180 days: Set-ADForestMode or modify\n"
+                "   CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration.\n"
+                "2. Ensure AD Recycle Bin is enabled (requires 2008 R2+ forest level).\n"
+                "3. Verify backup retention period exceeds tombstone lifetime."
+            ),
+        }]
+
+    def detect_expiring_accounts(self, accounts: list) -> list:
+        """Accounts expiring soon — operational awareness."""
+        if not accounts:
+            return []
+
+        names = []
+        for a in accounts:
+            name = _account_name(a)
+            days = a.get("_expires_days", "?")
+            names.append(f"{name} (expires in {days} days)")
+
+        return [{
+            "finding_id": "ACCT-002-EXPIRING",
+            "category": "Account Hygiene",
+            "severity": "INFO",
+            "title": f"Accounts Expiring Soon ({len(accounts)} within 30 days)",
+            "description": (
+                f"{len(accounts)} account(s) are set to expire within the next 30 days. "
+                "While account expiration is a positive security control, unexpected "
+                "expirations can cause service disruptions if not planned for."
+            ),
+            "affected": names[:30],
+            "details": {"count": len(accounts)},
+            "remediation": (
+                "1. Review expiring accounts to confirm expiration is intentional.\n"
+                "2. Extend accounts that are still needed.\n"
+                "3. Ensure service accounts do not have unintended expiration dates.\n"
+                "4. Notify account owners about upcoming expirations."
+            ),
+        }]
+
+    def detect_fgpp_coverage_gaps(self, fgpp_list: list, privileged_members: dict) -> list:
+        """
+        Check if Fine-Grained Password Policies cover privileged accounts.
+        If no FGPP applies to privileged groups, they use the weaker domain default.
+        """
+        if not fgpp_list or not privileged_members:
+            return []
+
+        # Collect all DNs that FGPPs apply to
+        fgpp_targets = set()
+        for pso in fgpp_list:
+            applies = pso.get("msDS-PSOAppliesTo")
+            if applies:
+                if isinstance(applies, str):
+                    fgpp_targets.add(applies.lower())
+                elif isinstance(applies, list):
+                    fgpp_targets.update(t.lower() for t in applies)
+
+        if not fgpp_targets:
+            return [{
+                "finding_id": "POL-006-FGPP-NO-TARGETS",
+                "category": "Password Policy",
+                "severity": "MEDIUM",
+                "title": "Fine-Grained Password Policies Have No Targets",
+                "description": (
+                    f"{len(fgpp_list)} Fine-Grained Password Policy/Policies exist but are not "
+                    "applied to any users or groups. Privileged accounts are using the default "
+                    "domain password policy, which may be insufficient."
+                ),
+                "affected": [pso.get("cn", "Unknown PSO") for pso in fgpp_list],
+                "details": {"pso_count": len(fgpp_list)},
+                "remediation": (
+                    "1. Apply FGPPs to privileged groups (Domain Admins, etc.).\n"
+                    "2. Set stricter requirements: 20+ character minimum, 24 history, lockout.\n"
+                    "3. Use: Set-ADFineGrainedPasswordPolicy -AppliesTo."
+                ),
+            }]
+
+        # Check if any privileged group is covered
+        uncovered = []
+        for group_name, members in privileged_members.items():
+            # Check if the group itself or its members are FGPP targets
+            # We'd need the group DN — approximate by checking group_name in targets
+            covered = False
+            for target in fgpp_targets:
+                if group_name.lower() in target:
+                    covered = True
+                    break
+            if not covered:
+                uncovered.append(group_name)
+
+        if not uncovered:
+            return []
+
+        return [{
+            "finding_id": "POL-007-FGPP-PRIV-GAP",
+            "category": "Password Policy",
+            "severity": "MEDIUM",
+            "title": f"Privileged Groups Not Covered by FGPP ({len(uncovered)})",
+            "description": (
+                f"{len(uncovered)} privileged group(s) are not targeted by any Fine-Grained "
+                "Password Policy. Members of these groups use the default domain password "
+                "policy, which may allow weaker passwords than appropriate for privileged access."
+            ),
+            "affected": uncovered,
+            "details": {"uncovered_groups": uncovered, "total_fgpp": len(fgpp_list)},
+            "remediation": (
+                "1. Create or update FGPPs to target all privileged groups.\n"
+                "2. Set minimum 20 characters, 24 history, complexity enabled.\n"
+                "3. Set lockout threshold of 3-5 attempts for privileged accounts.\n"
+                "4. Review FGPP precedence to ensure the strictest policy wins."
             ),
         }]
 

@@ -142,7 +142,7 @@ class HTMLReportGenerator:
             new_val    = "new" if is_new else "recurring"
 
             findings_html += f"""
-            <div class="finding-card" data-severity="{sev}" data-category="{cat}"
+            <div class="finding-card" id="{fid}" data-severity="{sev}" data-category="{cat}"
                  data-newstatus="{new_val}" data-findingid="{fid}">
               <div class="finding-top" style="background:{col};" onclick="toggleCard(this.parentElement)" title="Click to expand/collapse">
                 <div class="finding-top-left">
@@ -165,6 +165,7 @@ class HTMLReportGenerator:
                 </div>
                 <div class="finding-foot">
                   Finding ID: <code>{fid}</code> &nbsp;&middot;&nbsp; First seen: {first_seen} &nbsp;&middot;&nbsp; {new_badge}
+                  <a class="permalink" href="#{fid}" title="Permalink to this finding">&#128279; link</a>
                 </div>
               </div>
             </div>"""
@@ -387,11 +388,50 @@ code {{
 /* ── Tooltip for affected objects ── */
 .atag[title] {{ position: relative; }}
 
+/* ── Dark mode ── */
+body.dark {{
+  background: #0d1117; color: #c9d1d9;
+}}
+body.dark .stat-card, body.dark .risk-box, body.dark .meta-box,
+body.dark .finding-card, body.dark .card {{ background: #161b22; box-shadow: 0 2px 8px rgba(0,0,0,0.3); }}
+body.dark .search-box, body.dark .filter-select {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+body.dark .btn-collapse {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+body.dark .finding-body {{ background: #161b22 !important; }}
+body.dark .rem-block {{ background: #0d1117; border-color: #30363d; }}
+body.dark .atag {{ background: #21262d; color: #c9d1d9; }}
+body.dark .finding-title, body.dark .section-header h2 {{ color: #e6edf3; }}
+body.dark .finding-desc, body.dark .rem-text {{ color: #8b949e; }}
+body.dark .stat-lbl, body.dark .meta-k, body.dark .finding-foot {{ color: #484f58; }}
+body.dark .footer {{ border-color: #21262d; color: #484f58; }}
+body.dark code {{ background: #21262d; color: #c9d1d9; }}
+.dark-toggle {{
+  padding: 6px 12px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; cursor: pointer; font-size: 14px; font-family: inherit;
+}}
+body.dark .dark-toggle {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+.clipboard-btn {{
+  padding: 6px 14px; border: 1px solid #d0d8e4; border-radius: 8px;
+  background: white; cursor: pointer; font-size: 11px; font-weight: 600;
+  font-family: inherit; color: {CS_DARK};
+}}
+body.dark .clipboard-btn {{ background: #21262d; border-color: #30363d; color: #c9d1d9; }}
+.clipboard-btn.copied {{ background: #1a7a3f; color: white; border-color: #1a7a3f; }}
+
+/* ── Permalink anchors ── */
+.permalink {{
+  color: #8a99b0; text-decoration: none; font-size: 11px; margin-left: 8px; opacity: 0;
+  transition: opacity 0.15s;
+}}
+.finding-card:hover .permalink {{ opacity: 1; }}
+
 /* ── Print styles ── */
 @media print {{
-  .toolbar {{ display: none; }}
+  .toolbar, .dark-toggle, .clipboard-btn {{ display: none; }}
   .finding-card.collapsed .finding-body {{ max-height: none !important; padding: 14px 18px 12px; opacity: 1; }}
   .stat-card {{ cursor: default; }}
+  body.dark {{ background: white; color: #0a1628; }}
+  body.dark .stat-card, body.dark .risk-box, body.dark .meta-box,
+  body.dark .finding-card {{ background: white; box-shadow: none; border: 1px solid #ddd; }}
 }}
 
 @media (max-width:900px) {{
@@ -506,6 +546,55 @@ function toggleAllCards() {
   var btn = document.getElementById('btn-toggle');
   if (btn) btn.textContent = allCollapsed ? 'Expand All' : 'Collapse All';
 }
+
+function toggleDarkMode() {
+  document.body.classList.toggle('dark');
+  var btn = document.getElementById('dark-toggle');
+  if (btn) btn.textContent = document.body.classList.contains('dark') ? '☀' : '🌙';
+  try { localStorage.setItem('adpulse-dark', document.body.classList.contains('dark') ? '1' : '0'); } catch(e) {}
+}
+
+function copyToClipboard() {
+  var cards = document.querySelectorAll('.finding-card:not(.hidden)');
+  var lines = ['ADPulse Security Findings Summary', ''];
+  cards.forEach(function(card) {
+    var sev = card.getAttribute('data-severity');
+    var title = card.querySelector('.finding-title');
+    if (title) {
+      lines.push('[' + sev + '] ' + title.textContent);
+      var affected = card.querySelector('.affected-block strong');
+      if (affected) lines.push('  ' + affected.textContent);
+    }
+  });
+  lines.push('');
+  lines.push('Copied from ADPulse HTML Report');
+  var text = lines.join('\\n');
+  navigator.clipboard.writeText(text).then(function() {
+    var btn = document.getElementById('clipboard-btn');
+    if (btn) { btn.classList.add('copied'); btn.textContent = 'Copied!'; }
+    setTimeout(function() {
+      if (btn) { btn.classList.remove('copied'); btn.textContent = 'Copy Summary'; }
+    }, 2000);
+  });
+}
+
+// Restore dark mode preference
+try {
+  if (localStorage.getItem('adpulse-dark') === '1') {
+    document.body.classList.add('dark');
+    var btn = document.getElementById('dark-toggle');
+    if (btn) btn.textContent = '☀';
+  }
+} catch(e) {}
+
+// Handle permalink hash on load
+if (window.location.hash) {
+  var target = document.getElementById(window.location.hash.slice(1));
+  if (target) {
+    target.classList.remove('collapsed');
+    setTimeout(function() { target.scrollIntoView({behavior: 'smooth', block: 'center'}); }, 100);
+  }
+}
 """
 
         return f"""<!DOCTYPE html>
@@ -563,6 +652,8 @@ function toggleAllCards() {
     </select>
     <button class="btn-collapse" id="btn-toggle" onclick="toggleAllCards()">Collapse All</button>
     <button class="btn-reset" onclick="resetFilters()">Reset Filters</button>
+    <button class="clipboard-btn" id="clipboard-btn" onclick="copyToClipboard()">Copy Summary</button>
+    <button class="dark-toggle" id="dark-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">&#127769;</button>
     <span class="filter-count" id="filter-count"></span>
   </div>
 
@@ -869,6 +960,279 @@ class PDFReportGenerator:
 
 
 # =============================================================================
+#  Trend Dashboard
+# =============================================================================
+
+class TrendDashboardGenerator:
+    """Generates an interactive HTML trend dashboard from historical scan data."""
+
+    def generate(self, trend_data, output_path, company_name="Your Organisation"):
+        html = self._build(trend_data, company_name)
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(html, encoding="utf-8")
+        logger.info(f"Trend dashboard -> {output_path}")
+        return str(path)
+
+    def _build(self, trend_data, company_name):
+        now = datetime.now().strftime("%d %B %Y, %H:%M")
+
+        # Prepare chart data
+        labels = []
+        risk_scores = []
+        critical_counts = []
+        high_counts = []
+        medium_counts = []
+        total_counts = []
+
+        for t in trend_data:
+            date = (t.get("finished_at") or "")[:10]
+            labels.append(date)
+            risk_scores.append(t.get("risk_score", 0))
+            sc = t.get("severity_counts", {})
+            critical_counts.append(sc.get("CRITICAL", 0))
+            high_counts.append(sc.get("HIGH", 0))
+            medium_counts.append(sc.get("MEDIUM", 0))
+            total_counts.append(t.get("findings_count", 0))
+
+        chart_data = {
+            "labels": labels,
+            "risk_scores": risk_scores,
+            "critical": critical_counts,
+            "high": high_counts,
+            "medium": medium_counts,
+            "total": total_counts,
+        }
+
+        import json
+        chart_json = json.dumps(chart_data)
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADPulse Trend Dashboard - {company_name}</title>
+<style>
+*, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #f0f4f8; color: #0a1628; min-height: 100vh;
+}}
+.header {{
+  background: linear-gradient(135deg, #0a1628 0%, #1a3a6b 60%, #0053A4 100%);
+  padding: 24px 40px; color: white;
+}}
+.header h1 {{ font-size: 22px; font-weight: 700; }}
+.header p {{ font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 4px; }}
+.bar {{ height: 4px; background: linear-gradient(90deg, #FF8800 0%, #0053A4 100%); }}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 28px 40px; }}
+.card {{
+  background: white; border-radius: 10px; padding: 24px;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07); margin-bottom: 20px;
+}}
+.card h2 {{ font-size: 15px; font-weight: 700; margin-bottom: 16px; color: #0a1628; }}
+canvas {{ width: 100% !important; height: 300px !important; }}
+.grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
+.summary-cards {{
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px;
+}}
+.s-card {{
+  background: white; border-radius: 10px; padding: 16px; text-align: center;
+  box-shadow: 0 2px 8px rgba(0,83,164,0.07);
+}}
+.s-card .num {{ font-size: 32px; font-weight: 800; line-height: 1; }}
+.s-card .lbl {{ font-size: 10px; color: #8a99b0; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }}
+.trend-table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+.trend-table th {{ background: #f0f4f8; padding: 8px 12px; text-align: left; font-weight: 700; color: #4a5a6e; }}
+.trend-table td {{ padding: 8px 12px; border-bottom: 1px solid #eef2f7; }}
+.trend-table tr:hover {{ background: #f8fafc; }}
+@media (max-width: 900px) {{ .grid {{ grid-template-columns: 1fr; }} .summary-cards {{ grid-template-columns: repeat(2,1fr); }} }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>ADPulse Trend Dashboard</h1>
+  <p>{company_name} | Generated: {now} | {len(trend_data)} scans</p>
+</div>
+<div class="bar"></div>
+<div class="container">
+
+  <div class="summary-cards">
+    <div class="s-card">
+      <div class="num" style="color:#0053A4;">{len(trend_data)}</div>
+      <div class="lbl">Total Scans</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:{SEVERITY_HEX.get('CRITICAL','#c0152a')};">{risk_scores[-1] if risk_scores else 0}</div>
+      <div class="lbl">Latest Risk Score</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:#1a7a3f;">{"+" if len(risk_scores)>=2 and risk_scores[-1] <= risk_scores[-2] else ""}{risk_scores[-1] - risk_scores[-2] if len(risk_scores)>=2 else 0}</div>
+      <div class="lbl">Score Change</div>
+    </div>
+    <div class="s-card">
+      <div class="num" style="color:#0053A4;">{total_counts[-1] if total_counts else 0}</div>
+      <div class="lbl">Latest Findings</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Risk Score Trend</h2>
+      <canvas id="riskChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>Findings by Severity</h2>
+      <canvas id="sevChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Scan History</h2>
+    <table class="trend-table">
+      <thead><tr><th>Date</th><th>Risk Score</th><th>Critical</th><th>High</th><th>Medium</th><th>Total</th></tr></thead>
+      <tbody id="histTable"></tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+var D = {chart_json};
+
+// Simple canvas chart renderer (no external dependencies)
+function drawLineChart(canvasId, labels, datasets) {{
+  var c = document.getElementById(canvasId);
+  var ctx = c.getContext('2d');
+  var w = c.width = c.offsetWidth;
+  var h = c.height = c.offsetHeight;
+  var pad = {{top: 20, right: 20, bottom: 40, left: 50}};
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  var allVals = [];
+  datasets.forEach(function(ds) {{ allVals = allVals.concat(ds.data); }});
+  var maxVal = Math.max.apply(null, allVals) || 100;
+  maxVal = Math.ceil(maxVal / 10) * 10 || 10;
+
+  // Grid
+  ctx.strokeStyle = '#e8eef5';
+  ctx.lineWidth = 1;
+  for (var i = 0; i <= 5; i++) {{
+    var y = pad.top + ch - (ch * i / 5);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal * i / 5), pad.left - 8, y + 4);
+  }}
+
+  // X labels
+  ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  var step = Math.max(1, Math.floor(labels.length / 8));
+  for (var i = 0; i < labels.length; i += step) {{
+    var x = pad.left + (cw * i / (labels.length - 1 || 1));
+    ctx.fillText(labels[i], x, h - pad.bottom + 18);
+  }}
+
+  // Lines
+  datasets.forEach(function(ds) {{
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (var i = 0; i < ds.data.length; i++) {{
+      var x = pad.left + (cw * i / (ds.data.length - 1 || 1));
+      var y = pad.top + ch - (ch * ds.data[i] / maxVal);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }}
+    ctx.stroke();
+    // Dots
+    for (var i = 0; i < ds.data.length; i++) {{
+      var x = pad.left + (cw * i / (ds.data.length - 1 || 1));
+      var y = pad.top + ch - (ch * ds.data[i] / maxVal);
+      ctx.fillStyle = ds.color;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+    }}
+  }});
+}}
+
+function drawBarChart(canvasId, labels, datasets) {{
+  var c = document.getElementById(canvasId);
+  var ctx = c.getContext('2d');
+  var w = c.width = c.offsetWidth;
+  var h = c.height = c.offsetHeight;
+  var pad = {{top: 20, right: 20, bottom: 40, left: 50}};
+  var cw = w - pad.left - pad.right;
+  var ch = h - pad.top - pad.bottom;
+
+  var maxVal = 0;
+  for (var i = 0; i < labels.length; i++) {{
+    var sum = 0;
+    datasets.forEach(function(ds) {{ sum += ds.data[i] || 0; }});
+    if (sum > maxVal) maxVal = sum;
+  }}
+  maxVal = Math.ceil(maxVal / 5) * 5 || 10;
+
+  // Grid
+  ctx.strokeStyle = '#e8eef5'; ctx.lineWidth = 1;
+  for (var i = 0; i <= 5; i++) {{
+    var y = pad.top + ch - (ch * i / 5);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(Math.round(maxVal * i / 5), pad.left - 8, y + 4);
+  }}
+
+  var barW = (cw / labels.length) * 0.6;
+  var gap = (cw / labels.length) * 0.4;
+
+  for (var i = 0; i < labels.length; i++) {{
+    var x = pad.left + (cw * i / labels.length) + gap / 2;
+    var yOffset = 0;
+    datasets.forEach(function(ds) {{
+      var val = ds.data[i] || 0;
+      var barH = (ch * val / maxVal);
+      var y = pad.top + ch - yOffset - barH;
+      ctx.fillStyle = ds.color;
+      ctx.fillRect(x, y, barW, barH);
+      yOffset += barH;
+    }});
+    // X label
+    ctx.fillStyle = '#8a99b0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+    if (i % Math.max(1, Math.floor(labels.length / 8)) === 0) {{
+      ctx.fillText(labels[i], x + barW / 2, h - pad.bottom + 18);
+    }}
+  }}
+}}
+
+// Render charts
+window.addEventListener('load', function() {{
+  drawLineChart('riskChart', D.labels, [
+    {{data: D.risk_scores, color: '#0053A4'}}
+  ]);
+  drawBarChart('sevChart', D.labels, [
+    {{data: D.critical, color: '#c0152a'}},
+    {{data: D.high, color: '#d9500a'}},
+    {{data: D.medium, color: '#b07d00'}}
+  ]);
+
+  // Table
+  var tbody = document.getElementById('histTable');
+  for (var i = D.labels.length - 1; i >= 0; i--) {{
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + D.labels[i] + '</td>' +
+      '<td><strong>' + D.risk_scores[i] + '/100</strong></td>' +
+      '<td style="color:#c0152a;font-weight:700;">' + D.critical[i] + '</td>' +
+      '<td style="color:#d9500a;font-weight:700;">' + D.high[i] + '</td>' +
+      '<td style="color:#b07d00;font-weight:700;">' + D.medium[i] + '</td>' +
+      '<td>' + D.total[i] + '</td>';
+    tbody.appendChild(tr);
+  }}
+}});
+</script>
+</body>
+</html>"""
+
+
+# =============================================================================
 #  Report Manager
 # =============================================================================
 
@@ -879,9 +1243,10 @@ class ReportManager:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.gen_pdf      = config.get("generate_pdf",  "true").lower() == "true"
         self.gen_html     = config.get("generate_html", "true").lower() == "true"
+        self.gen_trend    = config.get("generate_trend_dashboard", "false").lower() == "true"
         self.company_name = config.get("company_name", "Your Organisation")
 
-    def generate_all(self, findings, run_id, domain_info=None):
+    def generate_all(self, findings, run_id, domain_info=None, baseline=None):
         ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
         paths = {}
 
@@ -900,5 +1265,15 @@ class ReportManager:
                     findings, run_id, p, self.company_name, domain_info)
             except Exception as e:
                 logger.error(f"PDF generation failed: {e}")
+
+        if self.gen_trend and baseline:
+            p = str(self.output_dir / f"ADPulse_Trends_{ts}.html")
+            try:
+                trend_data = baseline.get_trend_data(limit=30)
+                if trend_data:
+                    paths["trend"] = TrendDashboardGenerator().generate(
+                        trend_data, p, self.company_name)
+            except Exception as e:
+                logger.error(f"Trend dashboard generation failed: {e}")
 
         return paths

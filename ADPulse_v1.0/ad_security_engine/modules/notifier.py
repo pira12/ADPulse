@@ -12,13 +12,17 @@ The summary .txt file in ./output/ is the primary sharing mechanism.
 Copy it into an email, Teams message, or ticket manually.
 """
 
+import csv
+import io
 import json
 import logging
 import os
 import platform
+import socket
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +73,39 @@ class OutputNotifier:
       - Windows Event Log (optional)
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, output_config: dict = None):
         self.output_dir   = Path(config.get("output_dir", "./output"))
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.company_name = config.get("company_name", "Your Organisation")
-        self.min_severity = config.get("min_summary_severity", "MEDIUM").upper()
-        self.write_eventlog = config.get("write_windows_eventlog", "false").lower() == "true"
+        self.gen_csv      = config.get("generate_csv", "false").lower() == "true"
+
+        out = output_config or {}
+        self.min_severity = out.get("min_summary_severity", "MEDIUM").upper()
+        self.write_eventlog = out.get("write_windows_eventlog", "false").lower() == "true"
         self.min_sev_order  = SEVERITY_ORDER.get(self.min_severity, 2)
+
+        # Webhook config
+        self.webhook_url = out.get("webhook_url", "").strip()
+        self.webhook_min_sev = SEVERITY_ORDER.get(
+            out.get("webhook_min_severity", "HIGH").upper(), 1
+        )
+
+        # Syslog config
+        self.syslog_server = out.get("syslog_server", "").strip()
+        self.syslog_port = int(out.get("syslog_port", 514))
+
+        # Email config
+        self.email_enabled = out.get("email_enabled", "false").lower() == "true"
+        self.smtp_server = out.get("smtp_server", "")
+        self.smtp_port = int(out.get("smtp_port", 587))
+        self.smtp_use_tls = out.get("smtp_use_tls", "true").lower() == "true"
+        self.smtp_username = out.get("smtp_username", "")
+        self.smtp_password = out.get("smtp_password", "")
+        self.email_from = out.get("email_from", "")
+        self.email_to = out.get("email_to", "")
+        self.email_min_sev = SEVERITY_ORDER.get(
+            out.get("email_min_severity", "HIGH").upper(), 1
+        )
 
     # ------------------------------------------------------------------ #
     #  Public Entry Point                                                  #
@@ -90,8 +120,20 @@ class OutputNotifier:
         txt_path = self._write_summary_file(findings, run_id, report_paths, domain_info)
         self._write_json_export(findings, run_id, domain_info)
 
+        if self.gen_csv:
+            self._write_csv_export(findings, run_id)
+
         if self.write_eventlog and platform.system() == "Windows":
             self._write_windows_event(findings, run_id)
+
+        if self.webhook_url:
+            self._send_webhook(findings, run_id, domain_info)
+
+        if self.syslog_server:
+            self._send_syslog(findings, run_id)
+
+        if self.email_enabled:
+            self._send_email(findings, run_id, report_paths, domain_info)
 
         return txt_path
 
@@ -330,6 +372,210 @@ class OutputNotifier:
         Path(out_path).write_text(json.dumps(export, indent=2, default=str), encoding="utf-8")
         logger.info(f"JSON export -> {out_path}")
         return out_path
+
+    # ------------------------------------------------------------------ #
+    #  CSV Export                                                           #
+    # ------------------------------------------------------------------ #
+
+    def _write_csv_export(self, findings, run_id) -> str:
+        """Write findings as CSV for spreadsheet analysis."""
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(self.output_dir / f"ADPulse_Export_{ts}.csv")
+
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "Finding ID", "Severity", "Category", "Title",
+                "Affected Count", "Affected Objects", "First Seen",
+                "Is New", "Description", "Remediation"
+            ])
+            for finding in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity", "INFO"), 99)):
+                affected = finding.get("affected", [])
+                writer.writerow([
+                    finding.get("finding_id", ""),
+                    finding.get("severity", ""),
+                    finding.get("category", ""),
+                    finding.get("title", ""),
+                    len(affected),
+                    "; ".join(str(a) for a in affected[:50]),
+                    (finding.get("first_seen") or "")[:19],
+                    "NEW" if finding.get("is_new", 1) else "RECURRING",
+                    finding.get("description", ""),
+                    finding.get("remediation", ""),
+                ])
+
+        logger.info(f"CSV export -> {out_path}")
+        return out_path
+
+    # ------------------------------------------------------------------ #
+    #  Webhook Notification                                                #
+    # ------------------------------------------------------------------ #
+
+    def _send_webhook(self, findings, run_id, domain_info):
+        """Send scan summary to a webhook URL (Slack, Teams, custom endpoint)."""
+        try:
+            import urllib.request
+
+            alert_findings = [
+                f for f in findings
+                if SEVERITY_ORDER.get(f.get("severity", "INFO"), 99) <= self.webhook_min_sev
+            ]
+
+            if not alert_findings:
+                logger.debug("No findings meet webhook severity threshold.")
+                return
+
+            counts = {s: 0 for s in SEVERITY_ORDER}
+            for f in findings:
+                counts[f.get("severity", "INFO")] = counts.get(f.get("severity", "INFO"), 0) + 1
+
+            domain_name = (domain_info or {}).get("name", "Unknown")
+
+            # Generic JSON payload (works with most webhook endpoints)
+            payload = {
+                "text": (
+                    f"ADPulse Security Scan - {domain_name}\n"
+                    f"CRITICAL: {counts.get('CRITICAL',0)} | HIGH: {counts.get('HIGH',0)} | "
+                    f"MEDIUM: {counts.get('MEDIUM',0)} | LOW: {counts.get('LOW',0)}\n"
+                    f"Run ID: {run_id[:16]}..."
+                ),
+                "findings": [
+                    {"severity": f["severity"], "title": f["title"],
+                     "affected_count": len(f.get("affected", []))}
+                    for f in alert_findings[:20]
+                ],
+            }
+
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                self.webhook_url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=15)
+            logger.info(f"Webhook notification sent to {self.webhook_url}")
+
+        except Exception as e:
+            logger.warning(f"Webhook notification failed: {e}")
+
+    # ------------------------------------------------------------------ #
+    #  Syslog Output                                                       #
+    # ------------------------------------------------------------------ #
+
+    def _send_syslog(self, findings, run_id):
+        """Send each finding as a syslog message (UDP, RFC 5424 compatible)."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sev_to_priority = {
+                "CRITICAL": 2,  # LOG_CRIT
+                "HIGH": 3,      # LOG_ERR
+                "MEDIUM": 4,    # LOG_WARNING
+                "LOW": 6,       # LOG_INFO
+                "INFO": 6,      # LOG_INFO
+            }
+
+            for f in findings:
+                sev = f.get("severity", "INFO")
+                priority = 8 + sev_to_priority.get(sev, 6)  # facility=user (1) * 8 + severity
+                msg = (
+                    f"<{priority}>ADPulse run={run_id[:16]} "
+                    f"finding_id={f.get('finding_id','')} "
+                    f"severity={sev} "
+                    f"title=\"{f.get('title','')}\" "
+                    f"affected_count={len(f.get('affected',[]))} "
+                    f"category=\"{f.get('category','')}\""
+                )
+                sock.sendto(msg.encode("utf-8"), (self.syslog_server, self.syslog_port))
+
+            sock.close()
+            logger.info(f"Sent {len(findings)} syslog messages to {self.syslog_server}:{self.syslog_port}")
+
+        except Exception as e:
+            logger.warning(f"Syslog output failed: {e}")
+
+    # ------------------------------------------------------------------ #
+    #  Email Notification                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _send_email(self, findings, run_id, report_paths, domain_info):
+        """Send scan summary and PDF report via SMTP email."""
+        try:
+            import smtplib
+            from email.mime.multipart import MIMEMultipart
+            from email.mime.text import MIMEText
+            from email.mime.base import MIMEBase
+            from email import encoders
+
+            alert_findings = [
+                f for f in findings
+                if SEVERITY_ORDER.get(f.get("severity", "INFO"), 99) <= self.email_min_sev
+            ]
+
+            if not alert_findings and findings:
+                logger.debug("No findings meet email severity threshold.")
+                return
+
+            counts = {s: 0 for s in SEVERITY_ORDER}
+            for f in findings:
+                counts[f.get("severity", "INFO")] = counts.get(f.get("severity", "INFO"), 0) + 1
+
+            domain_name = (domain_info or {}).get("name", "Unknown Domain")
+            risk_score = min(
+                counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
+                counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
+            )
+
+            subject = f"ADPulse: {domain_name} - Risk {risk_score}/100"
+            if counts.get("CRITICAL", 0) > 0:
+                subject += f" [{counts['CRITICAL']} CRITICAL]"
+
+            body = (
+                f"ADPulse Security Scan Report\n"
+                f"{'='*50}\n"
+                f"Domain: {domain_name}\n"
+                f"Risk Score: {risk_score}/100\n"
+                f"Run ID: {run_id}\n\n"
+                f"Findings: CRITICAL={counts.get('CRITICAL',0)} | HIGH={counts.get('HIGH',0)} | "
+                f"MEDIUM={counts.get('MEDIUM',0)} | LOW={counts.get('LOW',0)}\n\n"
+            )
+
+            for f in alert_findings[:15]:
+                body += f"[{f['severity']}] {f['title']}\n"
+                body += f"  Affected: {len(f.get('affected',[]))} object(s)\n\n"
+
+            body += "\nFull report attached (PDF).\n"
+            body += "This email was generated by ADPulse.\n"
+
+            msg = MIMEMultipart()
+            msg["From"] = self.email_from
+            msg["To"] = self.email_to
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain"))
+
+            # Attach PDF if available
+            pdf_path = report_paths.get("pdf")
+            if pdf_path and Path(pdf_path).exists():
+                with open(pdf_path, "rb") as f:
+                    part = MIMEBase("application", "pdf")
+                    part.set_payload(f.read())
+                    encoders.encode_base64(part)
+                    part.add_header("Content-Disposition", f"attachment; filename={Path(pdf_path).name}")
+                    msg.attach(part)
+
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                if self.smtp_use_tls:
+                    server.starttls()
+                if self.smtp_username:
+                    server.login(self.smtp_username, self.smtp_password)
+                server.send_message(msg)
+
+            logger.info(f"Email notification sent to {self.email_to}")
+
+        except ImportError:
+            logger.warning("smtplib not available for email notification.")
+        except Exception as e:
+            logger.warning(f"Email notification failed: {e}")
 
     # ------------------------------------------------------------------ #
     #  Windows Event Log (optional)                                        #
