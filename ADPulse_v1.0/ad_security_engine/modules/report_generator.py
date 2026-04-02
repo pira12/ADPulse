@@ -74,15 +74,16 @@ ADPULSE_LOGO_SVG = (
 class HTMLReportGenerator:
 
     def generate(self, findings, run_id, output_path, company_name="Your Organisation",
-                 domain_info=None, scan_stats=None):
-        html = self._build(findings, run_id, company_name, domain_info)
+                 domain_info=None, scan_stats=None, suppressed=None):
+        html = self._build(findings, run_id, company_name, domain_info,
+                           suppressed=suppressed or [])
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(html, encoding="utf-8")
         logger.info(f"HTML report -> {output_path}")
         return str(path)
 
-    def _build(self, findings, run_id, company_name, domain_info):
+    def _build(self, findings, run_id, company_name, domain_info, suppressed=None):
         now = datetime.now().strftime("%d %B %Y, %H:%M")
         counts = {s: 0 for s in SEVERITY_ORDER}
         for f in findings:
@@ -138,6 +139,14 @@ class HTMLReportGenerator:
 
             rem        = f.get("remediation", "").replace("\n", "<br>")
             new_badge  = '<span class="new-badge">NEW</span>' if is_new else '<span class="rec-badge">RECURRING</span>'
+            policy_badge = ""
+            policy_status = f.get("policy_status", "")
+            if policy_status == "in_remediation":
+                policy_reason = f.get("policy_reason", "")
+                policy_badge = (
+                    f'<span class="policy-badge remediation-badge" '
+                    f'title="In remediation: {policy_reason}">&#128295; IN REMEDIATION</span>'
+                )
             first_seen = (f.get("first_seen") or "")[:10] or "This scan"
             new_val    = "new" if is_new else "recurring"
 
@@ -151,12 +160,16 @@ class HTMLReportGenerator:
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   {new_badge}
+                  {policy_badge}
                   <span class="finding-title-preview">{f.get('title','')}</span>
                   <span class="chevron">&#9660;</span>
                 </div>
               </div>
               <div class="finding-body" style="border-left:4px solid {col};background:{light};">
                 <h3 class="finding-title">{f.get('title','')}</h3>
+                {f'<p class="policy-note"><em>&#128295; In remediation: {f.get("policy_reason","")}'
+                 f'{(" &mdash; expires " + f["policy_expires"]) if f.get("policy_expires") else ""}'
+                 f'</em></p>' if f.get("policy_status") == "in_remediation" else ''}
                 <p class="finding-desc">{f.get('description','')}</p>
                 {"<div class='affected-block'><strong>Affected objects (" + str(len(affected)) + "):</strong><div class='tags'>" + tags_html + "</div></div>" if affected else ""}
                 <div class="rem-block" onclick="event.stopPropagation();">
@@ -190,6 +203,56 @@ class HTMLReportGenerator:
         cat_options = '<option value="ALL">All Categories</option>'
         for cat in categories:
             cat_options += f'<option value="{cat}">{cat}</option>'
+
+        # Build audit trail for suppressed findings
+        suppressed = suppressed or []
+        audit_trail_html = ""
+        if suppressed:
+            rows = ""
+            for f in suppressed:
+                status = f.get("policy_status", "")
+                reason = f.get("policy_reason", "")
+                exp    = f.get("policy_expires") or "—"
+                by     = f.get("policy_set_by") or "—"
+                sev    = f.get("severity", "INFO")
+                col    = SEVERITY_HEX.get(sev, "#666")
+                rows += f"""
+                <tr>
+                  <td><code style="font-size:11px;">{f.get('finding_id','')}</code></td>
+                  <td style="color:{col};font-weight:700;">{sev}</td>
+                  <td>{f.get('title','')}</td>
+                  <td><span class="policy-status-tag">{status.replace('_',' ').upper()}</span></td>
+                  <td>{reason}</td>
+                  <td>{by}</td>
+                  <td>{exp}</td>
+                </tr>"""
+            audit_trail_html = f"""
+            <div class="section-header" style="margin-top:40px;">
+              <h2>Policy Audit Trail</h2>
+              <span class="count-badge">{len(suppressed)} suppressed</span>
+            </div>
+            <div style="background:white;border-radius:10px;padding:20px;
+                        box-shadow:0 2px 8px rgba(0,83,164,0.07);overflow-x:auto;margin-bottom:24px;">
+              <p style="font-size:13px;color:#8a99b0;margin-bottom:12px;">
+                These findings are suppressed by policy. Nothing is hidden from this report —
+                all decisions are logged here for audit purposes.
+              </p>
+              <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead>
+                  <tr style="background:#f0f4f8;text-transform:uppercase;font-size:10px;
+                             letter-spacing:0.5px;color:#8a99b0;">
+                    <th style="padding:8px;text-align:left;">Finding ID</th>
+                    <th style="padding:8px;text-align:left;">Severity</th>
+                    <th style="padding:8px;text-align:left;">Title</th>
+                    <th style="padding:8px;text-align:left;">Status</th>
+                    <th style="padding:8px;text-align:left;">Reason</th>
+                    <th style="padding:8px;text-align:left;">Set By</th>
+                    <th style="padding:8px;text-align:left;">Expires</th>
+                  </tr>
+                </thead>
+                <tbody>{rows}</tbody>
+              </table>
+            </div>"""
 
         css = f"""
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
@@ -440,6 +503,24 @@ body.dark .clipboard-btn {{ background: #21262d; border-color: #30363d; color: #
   .header-inner {{ flex-direction: column; align-items: flex-start; }}
   .toolbar {{ flex-direction: column; }}
   .search-box {{ min-width: 100%; }}
+}}
+
+/* ── Policy badges ── */
+.policy-badge {{
+  font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 20px; white-space: nowrap;
+}}
+.remediation-badge {{
+  background: #e8f4fd; color: #0053A4; border: 1px solid #b3d9f7;
+}}
+.policy-note {{
+  font-size: 12px; color: #0053A4; background: #e8f4fd;
+  border-left: 3px solid #0053A4; padding: 6px 10px;
+  border-radius: 0 4px 4px 0; margin-bottom: 10px;
+}}
+.policy-status-tag {{
+  font-size: 10px; font-weight: 700; padding: 2px 6px;
+  border-radius: 10px; background: #f0f4f8; color: #0053A4;
 }}"""
 
         js = """
@@ -659,6 +740,7 @@ if (window.location.hash) {
 
   {findings_html if findings else "<div class='no-findings'><div style='font-size:48px;margin-bottom:12px;'>&#9989;</div><strong>No findings detected.</strong><br>Your environment looks clean.</div>"}
 
+  {audit_trail_html}
 </div>
 
 <div class="footer">
@@ -1246,7 +1328,7 @@ class ReportManager:
         self.gen_trend    = config.get("generate_trend_dashboard", "false").lower() == "true"
         self.company_name = config.get("company_name", "Your Organisation")
 
-    def generate_all(self, findings, run_id, domain_info=None, baseline=None):
+    def generate_all(self, findings, run_id, domain_info=None, baseline=None, suppressed=None):
         ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
         paths = {}
 
@@ -1254,7 +1336,8 @@ class ReportManager:
             p = str(self.output_dir / f"ADPulse_Report_{ts}.html")
             try:
                 paths["html"] = HTMLReportGenerator().generate(
-                    findings, run_id, p, self.company_name, domain_info)
+                    findings, run_id, p, self.company_name, domain_info,
+                    suppressed=suppressed or [])
             except Exception as e:
                 logger.error(f"HTML generation failed: {e}")
 
