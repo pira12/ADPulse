@@ -1,0 +1,162 @@
+[ldap]
+# ── Domain Controller ────────────────────────────────────────────────
+# Hostname or IP of your Domain Controller.
+# WHERE TO FIND: Run "nltest /dsgetdc:" or "echo %LOGONSERVER%" in cmd on your VM.
+#                Or open "Active Directory Users and Computers" — the connected DC
+#                is shown in the tree root, e.g. "dc01.corp.local".
+server = dc01.company.local
+
+# ── Domain name ──────────────────────────────────────────────────────
+# Your AD domain's DNS name (used to build the LDAP base DN).
+# WHERE TO FIND: Run "echo %USERDNSDOMAIN%" in cmd, or check
+#                System > "Full computer name" (e.g. PC01.corp.local → corp.local).
+domain = company.local
+
+# ── Authentication ───────────────────────────────────────────────────
+# Leave username AND password BLANK to use integrated Windows authentication.
+# This uses the logged-in Windows user's Kerberos session — no service account needed.
+# Just run ADPulse on a domain-joined Windows VM where your user has read access to AD.
+#
+# Only fill these in if you need to run as a different user or from a non-domain machine.
+username =
+password =
+
+# ── LDAP port and encryption ─────────────────────────────────────────
+# 389 = LDAP (plaintext), 636 = LDAPS (encrypted).
+# WHERE TO FIND: 389 works by default. Use 636 if your DC requires SSL
+#                (check with your AD admin or try both).
+port = 389
+
+# Use SSL (LDAPS) - set to true if using port 636
+use_ssl = false
+
+# Connection timeout in seconds
+timeout = 30
+
+# ── Multi-Domain Support ──────────────────────────────────────────────
+# To scan additional domains, add numbered sections:
+# [ldap.2]
+# server = dc01.other.local
+# domain = other.local
+# username =
+# password =
+# port = 636
+# use_ssl = true
+
+[scanning]
+# How often to run a full scan (in hours)
+scan_interval_hours = 6
+
+# Days of inactivity before an account is flagged as stale
+stale_account_days = 60
+
+# Days since password last set before flagging (0 = disable)
+password_age_days = 365
+
+# Days ahead to check for expiring accounts
+expiring_account_days = 30
+
+# Privileged groups to monitor for membership changes (comma-separated)
+privileged_groups = Domain Admins,Enterprise Admins,Schema Admins,Administrators,Account Operators,Backup Operators,Group Policy Creator Owners
+
+[output]
+# Minimum severity to show in the console summary and summary .txt file
+# Findings at or above this level will be included
+# Options: LOW, MEDIUM, HIGH, CRITICAL
+min_summary_severity = MEDIUM
+
+# Write an entry to the Windows Application Event Log after each scan
+# Useful if you have a SIEM (Splunk, Microsoft Sentinel, etc.) reading event logs
+# Requires: pip install pywin32
+write_windows_eventlog = false
+
+# ── Webhook Notifications ─────────────────────────────────────────────
+# Send scan results to a webhook URL (e.g., Slack, Teams, custom endpoint)
+# Leave blank to disable
+webhook_url =
+
+# Minimum severity to trigger webhook notification
+webhook_min_severity = HIGH
+
+# ── Syslog Output ─────────────────────────────────────────────────────
+# Send findings to a syslog server (UDP)
+# Leave blank to disable
+syslog_server =
+syslog_port = 514
+
+# ── Email Notifications ───────────────────────────────────────────────
+# SMTP settings for email delivery of reports
+email_enabled = false
+smtp_server =
+smtp_port = 587
+smtp_use_tls = true
+smtp_username =
+smtp_password =
+email_from = adpulse@company.local
+email_to = security-team@company.local
+# Minimum severity to trigger email (LOW, MEDIUM, HIGH, CRITICAL)
+email_min_severity = HIGH
+
+[reporting]
+# Output directory for reports
+output_dir = ./output
+
+# Generate PDF report
+generate_pdf = true
+
+# Generate HTML report
+generate_html = true
+
+# Generate CSV export (for spreadsheet analysis)
+generate_csv = true
+
+# Generate trend dashboard (HTML page with historical charts)
+generate_trend_dashboard = true
+
+# Company name shown on reports
+company_name = Your Company
+
+# Logo path (optional, leave blank to skip)
+logo_path =
+
+[database]
+# SQLite database path for storing baselines
+db_path = ./ad_baseline.db
+
+# Number of days to retain scan history (0 = keep forever)
+retention_days = 365
+
+[logging]
+# Log file path
+log_file = ./logs/ad_security_engine.log
+
+# Log level (DEBUG, INFO, WARNING, ERROR)
+log_level = INFO
+
+# Max log file size in MB before rotation
+max_log_size_mb = 10
+
+# Number of backup log files to keep
+log_backup_count = 5
+
+# ── Exclusions ────────────────────────────────────────────────────────
+# Suppress specific findings or affected objects from reports.
+# Use finding IDs (e.g., KERB-001-STANDARD) or account names.
+#
+# [exclusions]
+# # Suppress entire finding IDs (comma-separated)
+# finding_ids = KERB-001-STANDARD,ACCT-001-STALE
+#
+# # Suppress specific accounts from affected lists (comma-separated)
+# accounts = svc-legacy-app,svc-old-system
+#
+# # Reason for exclusions (shown in reports for audit trail)
+# reason = Accepted risk per security review 2026-01-15
+
+# ── Severity Overrides ────────────────────────────────────────────────
+# Override the default severity for specific finding IDs.
+# Format: finding_id = NEW_SEVERITY
+#
+# [severity_overrides]
+# DELEG-002-CONSTRAINED = HIGH
+# COMP-001-STALE = MEDIUM
