@@ -3,15 +3,10 @@
     Installs the AD Security Continuous Assessment Engine as a Windows Scheduled Task.
 
 .DESCRIPTION
-    Creates a scheduled task that runs the scanner every N hours as the specified
-    service account. The service account requires NO admin rights — just be a
-    member of Domain Users.
-
-.PARAMETER ServiceAccount
-    The domain account to run the task as (e.g. DOMAIN\svc-secmonitor)
-
-.PARAMETER ServicePassword
-    The password for the service account
+    Creates a scheduled task that runs the scanner every N hours.
+    By default, runs as the currently logged-in user using integrated Windows
+    authentication — no service account needed. Just run this on a domain-joined
+    VM where your user has read access to AD.
 
 .PARAMETER PythonPath
     Full path to python.exe (default: tries to find it automatically)
@@ -23,16 +18,13 @@
     How often to run the scan (default: 6 hours)
 
 .EXAMPLE
-    .\install_scheduled_task.ps1 -ServiceAccount "CORP\svc-secmonitor" -ServicePassword "P@ssw0rd!" -InstallDir "C:\ADSecurityEngine"
+    .\install_scheduled_task.ps1 -InstallDir "C:\ADSecurityEngine"
+
+.EXAMPLE
+    .\install_scheduled_task.ps1 -InstallDir "C:\ADSecurityEngine" -IntervalHours 12
 #>
 
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$ServiceAccount,
-
-    [Parameter(Mandatory=$true)]
-    [string]$ServicePassword,
-
     [Parameter(Mandatory=$false)]
     [string]$PythonPath = "",
 
@@ -48,12 +40,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║   AD Security Engine - Scheduled Task Installer              ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "=======================================================" -ForegroundColor Cyan
+Write-Host "   AD Security Engine - Scheduled Task Installer        " -ForegroundColor Cyan
+Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host ""
 
-# ── Find Python ──────────────────────────────────────────────────────────────
+# -- Find Python ---------------------------------------------------------------
 if (-not $PythonPath) {
     $candidates = @(
         "python",
@@ -70,20 +63,20 @@ if (-not $PythonPath) {
             if ($LASTEXITCODE -eq 0) {
                 $PythonPath = (Get-Command $candidate -ErrorAction SilentlyContinue)?.Source
                 if (-not $PythonPath) { $PythonPath = $candidate }
-                Write-Host "✅ Found Python: $PythonPath ($ver)" -ForegroundColor Green
+                Write-Host "Found Python: $PythonPath ($ver)" -ForegroundColor Green
                 break
             }
         } catch {}
     }
     if (-not $PythonPath) {
-        Write-Host "❌ Python not found. Install Python 3.10+ and try again." -ForegroundColor Red
+        Write-Host "ERROR: Python not found. Install Python 3.10+ and try again." -ForegroundColor Red
         exit 1
     }
 }
 
-# ── Verify install directory ──────────────────────────────────────────────────
+# -- Verify install directory ---------------------------------------------------
 if (-not (Test-Path $InstallDir)) {
-    Write-Host "❌ Install directory not found: $InstallDir" -ForegroundColor Red
+    Write-Host "ERROR: Install directory not found: $InstallDir" -ForegroundColor Red
     Write-Host "   Copy the ad_security_engine folder to $InstallDir and try again."
     exit 1
 }
@@ -92,37 +85,37 @@ $MainScript  = Join-Path $InstallDir "main.py"
 $ConfigFile  = Join-Path $InstallDir "config.ini"
 
 if (-not (Test-Path $MainScript)) {
-    Write-Host "❌ main.py not found in $InstallDir" -ForegroundColor Red
+    Write-Host "ERROR: main.py not found in $InstallDir" -ForegroundColor Red
     exit 1
 }
 if (-not (Test-Path $ConfigFile)) {
-    Write-Host "❌ config.ini not found in $InstallDir" -ForegroundColor Red
+    Write-Host "ERROR: config.ini not found in $InstallDir" -ForegroundColor Red
     Write-Host "   Copy config.ini.example to config.ini and configure your settings."
     exit 1
 }
 
-# ── Install dependencies ──────────────────────────────────────────────────────
-Write-Host "📦 Installing Python dependencies..." -ForegroundColor Yellow
+# -- Install dependencies ------------------------------------------------------
+Write-Host "Installing Python dependencies..." -ForegroundColor Yellow
 $reqFile = Join-Path $InstallDir "requirements.txt"
 & $PythonPath -m pip install -r $reqFile --quiet
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "❌ pip install failed. Check your internet connection." -ForegroundColor Red
+    Write-Host "ERROR: pip install failed. Check your internet connection." -ForegroundColor Red
     exit 1
 }
-Write-Host "✅ Dependencies installed." -ForegroundColor Green
+Write-Host "Dependencies installed." -ForegroundColor Green
 
-# ── Create output and logs directories ───────────────────────────────────────
+# -- Create output and logs directories ----------------------------------------
 New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "output") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "logs")   | Out-Null
 
-# ── Remove existing task if present ──────────────────────────────────────────
+# -- Remove existing task if present -------------------------------------------
 $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($existingTask) {
-    Write-Host "⚠️  Removing existing task '$TaskName'..." -ForegroundColor Yellow
+    Write-Host "Removing existing task '$TaskName'..." -ForegroundColor Yellow
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
-# ── Build task components ─────────────────────────────────────────────────────
+# -- Build task components -----------------------------------------------------
 $Action = New-ScheduledTaskAction `
     -Execute $PythonPath `
     -Argument "`"$MainScript`" --config `"$ConfigFile`"" `
@@ -140,13 +133,14 @@ $Settings = New-ScheduledTaskSettingsSet `
     -RunOnlyIfNetworkAvailable `
     -MultipleInstances IgnoreNew
 
+# Run as the current logged-in user — uses integrated Windows auth
 $Principal = New-ScheduledTaskPrincipal `
-    -UserId $ServiceAccount `
-    -LogonType Password `
-    -RunLevel Limited   # Explicitly NOT elevated
+    -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    -LogonType S4U `
+    -RunLevel Limited
 
-# ── Register the task ─────────────────────────────────────────────────────────
-Write-Host "📅 Registering scheduled task '$TaskName'..." -ForegroundColor Yellow
+# -- Register the task ---------------------------------------------------------
+Write-Host "Registering scheduled task '$TaskName'..." -ForegroundColor Yellow
 
 Register-ScheduledTask `
     -TaskName $TaskName `
@@ -154,15 +148,14 @@ Register-ScheduledTask `
     -Trigger $TriggerBoot `
     -Settings $Settings `
     -Principal $Principal `
-    -Password $ServicePassword `
-    -Description "AD Security Continuous Assessment Engine - runs every $IntervalHours hours using low-privilege domain account" `
+    -Description "AD Security Continuous Assessment Engine - runs every $IntervalHours hours using integrated Windows auth" `
     -Force | Out-Null
 
-Write-Host "✅ Scheduled task registered successfully." -ForegroundColor Green
+Write-Host "Scheduled task registered successfully." -ForegroundColor Green
 
-# ── Run a test scan immediately ───────────────────────────────────────────────
+# -- Run a test scan immediately -----------------------------------------------
 Write-Host ""
-Write-Host "🔍 Running initial test scan..." -ForegroundColor Yellow
+Write-Host "Running initial test scan..." -ForegroundColor Yellow
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 5
 
@@ -170,12 +163,12 @@ $taskInfo = Get-ScheduledTask -TaskName $TaskName
 $taskInfo | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult, NextRunTime | Format-List
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║  ✅ Installation Complete!                                    ║" -ForegroundColor Green
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "=======================================================" -ForegroundColor Green
+Write-Host "   Installation Complete!                               " -ForegroundColor Green
+Write-Host "=======================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Task Name    : $TaskName"
-Write-Host "  Runs As      : $ServiceAccount (standard domain user, no admin rights)"
+Write-Host "  Runs As      : $env:USERDOMAIN\$env:USERNAME (integrated Windows auth)"
 Write-Host "  Interval     : Every $IntervalHours hours"
 Write-Host "  Install Dir  : $InstallDir"
 Write-Host "  Reports      : $InstallDir\output\"

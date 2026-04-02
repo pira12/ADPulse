@@ -2,18 +2,22 @@
 ldap_collector.py
 -----------------
 Handles all LDAP queries against Active Directory.
-Requires only a standard domain user account - NO elevated privileges.
+Supports two authentication modes:
+  1. Integrated Windows auth (default) — uses the logged-in user's Kerberos token.
+     Just run the tool on a domain-joined Windows VM with read access to AD.
+  2. Explicit credentials — provide username/password in config.ini for remote use.
 
 All data is read-only. No writes are performed.
 """
 
 import logging
+import os
 import socket
 from datetime import datetime, timezone
 from typing import Optional
 
 from ldap3 import (
-    Server, Connection, ALL, NTLM, SUBTREE, ALL_ATTRIBUTES, ALL_OPERATIONAL_ATTRIBUTES
+    Server, Connection, ALL, NTLM, SASL, SUBTREE, ALL_ATTRIBUTES, ALL_OPERATIONAL_ATTRIBUTES
 )
 from ldap3.core.exceptions import LDAPException
 
@@ -44,26 +48,36 @@ def domain_to_base_dn(domain: str) -> str:
 class LDAPCollector:
     """
     Connects to an Active Directory domain controller via LDAP and
-    collects security-relevant data using only standard user credentials.
+    collects security-relevant data.
+
+    Authentication modes:
+      - Integrated Windows auth: leave username/password blank in config.
+        Uses the logged-in Windows user's Kerberos session (SASL + GSS-SPNEGO).
+      - Explicit credentials: set username/password in config for NTLM bind.
     """
 
     def __init__(self, config: dict):
         self.server_host = config["server"]
         self.domain = config["domain"]
-        self.username = config["username"]
-        self.password = config["password"]
+        self.username = config.get("username", "").strip()
+        self.password = config.get("password", "").strip()
         self.port = int(config.get("port", 389))
         self.use_ssl = config.get("use_ssl", "false").lower() == "true"
         self.timeout = int(config.get("timeout", 30))
         self.base_dn = domain_to_base_dn(self.domain)
         self.conn: Optional[Connection] = None
+        self.use_integrated_auth = not self.username or not self.password
 
     # ------------------------------------------------------------------ #
     #  Connection Management                                               #
     # ------------------------------------------------------------------ #
 
     def connect(self) -> bool:
-        """Establish LDAP connection using NTLM authentication."""
+        """
+        Establish LDAP connection.
+        Uses integrated Windows auth (Kerberos) when no credentials are configured,
+        or NTLM when explicit username/password are provided.
+        """
         try:
             server = Server(
                 self.server_host,
@@ -72,20 +86,44 @@ class LDAPCollector:
                 get_info=ALL,
                 connect_timeout=self.timeout,
             )
-            # NTLM bind - works with domain\user or UPN
-            bind_user = f"{self.domain}\\{self.username}"
-            self.conn = Connection(
-                server,
-                user=bind_user,
-                password=self.password,
-                authentication=NTLM,
-                auto_bind=True,
-                raise_exceptions=True,
-            )
-            logger.info(f"Connected to LDAP server {self.server_host} as {bind_user}")
+
+            if self.use_integrated_auth:
+                # Integrated Windows authentication — uses the logged-in user's
+                # Kerberos ticket. Works on domain-joined Windows machines.
+                self.conn = Connection(
+                    server,
+                    authentication=SASL,
+                    sasl_mechanism="GSS-SPNEGO",
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+                whoami = os.environ.get("USERNAME", os.environ.get("USER", "current user"))
+                logger.info(
+                    f"Connected to LDAP server {self.server_host} "
+                    f"using integrated Windows auth ({whoami})"
+                )
+            else:
+                # Explicit NTLM bind with username/password from config
+                bind_user = f"{self.domain}\\{self.username}"
+                self.conn = Connection(
+                    server,
+                    user=bind_user,
+                    password=self.password,
+                    authentication=NTLM,
+                    auto_bind=True,
+                    raise_exceptions=True,
+                )
+                logger.info(f"Connected to LDAP server {self.server_host} as {bind_user}")
+
             return True
         except LDAPException as e:
             logger.error(f"LDAP connection failed: {e}")
+            if self.use_integrated_auth:
+                logger.error(
+                    "Integrated auth failed. Make sure you are running on a "
+                    "domain-joined Windows machine with a valid Kerberos ticket, "
+                    "or provide explicit username/password in config.ini."
+                )
             return False
         except socket.error as e:
             logger.error(f"Network error connecting to {self.server_host}: {e}")

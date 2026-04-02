@@ -1,18 +1,33 @@
 [ldap]
-# Domain Controller hostname or IP
+# ── Domain Controller ────────────────────────────────────────────────
+# Hostname or IP of your Domain Controller.
+# WHERE TO FIND: Run "nltest /dsgetdc:" or "echo %LOGONSERVER%" in cmd on your VM.
+#                Or open "Active Directory Users and Computers" — the connected DC
+#                is shown in the tree root, e.g. "dc01.corp.local".
 server = dc01.company.local
 
-# Domain (used for LDAP base DN construction)
+# ── Domain name ──────────────────────────────────────────────────────
+# Your AD domain's DNS name (used to build the LDAP base DN).
+# WHERE TO FIND: Run "echo %USERDNSDOMAIN%" in cmd, or check
+#                System > "Full computer name" (e.g. PC01.corp.local → corp.local).
 domain = company.local
 
-# Service account credentials (standard domain user, NO admin rights needed)
-username = svc-secmonitor
-password = YourPasswordHere
+# ── Authentication ───────────────────────────────────────────────────
+# Leave username AND password BLANK to use integrated Windows authentication.
+# This uses the logged-in Windows user's Kerberos session — no service account needed.
+# Just run ADPulse on a domain-joined Windows VM where your user has read access to AD.
+#
+# Only fill these in if you need to run as a different user or from a non-domain machine.
+username =
+password =
 
-# LDAP port (389 = plaintext, 636 = LDAPS)
+# ── LDAP port and encryption ─────────────────────────────────────────
+# 389 = LDAP (plaintext), 636 = LDAPS (encrypted).
+# WHERE TO FIND: 389 works by default. Use 636 if your DC requires SSL
+#                (check with your AD admin or try both).
 port = 389
 
-# Use SSL (LDAPS) - recommended for production
+# Use SSL (LDAPS) - set to true if using port 636
 use_ssl = false
 
 # Connection timeout in seconds
@@ -23,8 +38,8 @@ timeout = 30
 # [ldap.2]
 # server = dc01.other.local
 # domain = other.local
-# username = svc-secmonitor
-# password = YourPasswordHere
+# username =
+# password =
 # port = 636
 # use_ssl = true
 
