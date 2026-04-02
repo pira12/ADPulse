@@ -96,6 +96,7 @@ class DetectionEngine:
     def __init__(self, config: dict):
         self.stale_days = int(config.get("stale_account_days", 60))
         self.password_age_days = int(config.get("password_age_days", 365))
+        self.dormant_admin_days = int(config.get("dormant_admin_days", 90))
         privileged_str = config.get(
             "privileged_groups",
             "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
@@ -1398,5 +1399,197 @@ class DetectionEngine:
                 "1. Verify all new accounts were created through an authorised process.\n"
                 "2. Confirm accounts are assigned to real, known individuals.\n"
                 "3. Check that new accounts have appropriate permissions (principle of least privilege)."
+            ),
+        }]
+
+    def detect_dcsync_rights(self, domain_acl: list, domain_controllers: list) -> list:
+        """
+        ACL-001-DCSYNC: Non-DC accounts with DCSync replication rights.
+        Any account with DS-Replication-Get-Changes-All can dump all AD hashes.
+        """
+        dc_names = {
+            str(dc.get("sAMAccountName", "")).lower().rstrip("$")
+            for dc in domain_controllers
+        }
+        flagged = [
+            entry["sam_account_name"]
+            for entry in domain_acl
+            if entry.get("sam_account_name", "").lower().rstrip("$") not in dc_names
+            and entry.get("sam_account_name")
+        ]
+        if not flagged:
+            return []
+        return [{
+            "finding_id":   "ACL-001-DCSYNC",
+            "category":     "Privileged Access",
+            "severity":     "CRITICAL",
+            "title":        f"{len(flagged)} Account(s) Have DCSync Rights",
+            "description": (
+                "The following non-DC accounts have DS-Replication-Get-Changes-All "
+                "permission on the domain root. This grants the ability to perform a "
+                "DCSync attack — extracting all password hashes from AD without "
+                "logging on to a Domain Controller."
+            ),
+            "affected":     flagged,
+            "details":      {"count": len(flagged)},
+            "remediation": (
+                "1. Remove DCSync rights from all non-DC accounts.\n"
+                "2. In ADUC: right-click domain root → Properties → Security → "
+                "   find the account → remove 'Replicating Directory Changes All'.\n"
+                "3. Investigate how this permission was granted and whether a DCSync "
+                "   attack has already occurred (check logs for mimikatz indicators)."
+            ),
+        }]
+
+    def detect_dormant_privileged_accounts(self, users: list, privileged_members: dict) -> list:
+        """
+        PRIV-001-DORMANT-ADMIN: Enabled privileged accounts inactive for
+        more than dormant_admin_days days. An unused admin account is a
+        free credential for an attacker who finds the password.
+        """
+        # Build a set of sAMAccountNames that appear in any privileged group
+        priv_accounts = set()
+        for members in privileged_members.values():
+            for dn in members:
+                # Extract CN from DN: "CN=admin1,OU=..." → "admin1"
+                cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "").strip().lower()
+                priv_accounts.add(cn)
+
+        dormant = []        # list of account name strings for "affected"
+        dormant_detail = [] # list of "name (Nd ago)" for details
+        for u in users:
+            sam = _account_name(u).lower()
+            if sam not in priv_accounts:
+                continue
+            uac = u.get("userAccountControl") or 0
+            try:
+                uac = int(uac)
+            except (TypeError, ValueError):
+                uac = 0
+            if uac & UAC_DISABLED:
+                continue  # disabled accounts are not a login risk
+
+            days = _days_since(_to_datetime(u.get("lastLogonTimestamp")))
+            if days is not None and days > self.dormant_admin_days:
+                name = _account_name(u)
+                dormant.append(name)
+                dormant_detail.append(f"{name} ({days}d ago)")
+
+        if not dormant:
+            return []
+        return [{
+            "finding_id":   "PRIV-001-DORMANT-ADMIN",
+            "category":     "Privileged Access",
+            "severity":     "HIGH",
+            "title":        f"{len(dormant)} Dormant Privileged Account(s)",
+            "description": (
+                f"{len(dormant)} enabled account(s) in privileged groups have not "
+                f"authenticated in more than {self.dormant_admin_days} days. "
+                "Unused admin accounts are high-value targets — if credentials are "
+                "compromised the account can be used without triggering normal activity alerts."
+            ),
+            "affected":     dormant,
+            "details":      {"count": len(dormant), "threshold_days": self.dormant_admin_days, "accounts": dormant_detail},
+            "remediation": (
+                "1. Confirm with the account owner whether the account is still needed.\n"
+                "2. Disable accounts no longer required: Disable-ADAccount.\n"
+                "3. If the account is legitimately unused, consider removing its group memberships "
+                "   and re-adding when needed (just-in-time access).\n"
+                f"4. Adjust dormant_admin_days in config.ini if the {self.dormant_admin_days}-day "
+                "   threshold does not match your environment."
+            ),
+        }]
+
+    def detect_nested_privilege(self, all_groups: list, privileged_members: dict) -> list:
+        """
+        PRIV-002-NESTED-PRIV: Accounts reaching privileged groups through
+        2+ levels of group nesting (e.g., jsmith → HelpDesk → Domain Admins).
+        Only direct members are tracked in privileged_members — indirect paths are missed.
+
+        Data model: group["member"] lists the DNs of objects that belong to that group.
+        If a privileged group DN appears in the member list of an outer group, then
+        users in that outer group have indirect privileged access.
+        """
+        if not all_groups:
+            return []
+
+        # Build maps keyed by lowercase DN
+        dn_to_members: dict[str, list] = {}
+        dn_to_sam: dict[str, str] = {}
+        for g in all_groups:
+            dn = str(g.get("dn") or g.get("distinguishedName") or "")
+            members = g.get("member") or []
+            if isinstance(members, str):
+                members = [members]
+            dn_to_members[dn.lower()] = [m.lower() for m in members]
+            sam = str(g.get("sAMAccountName") or "")
+            if sam:
+                dn_to_sam[dn.lower()] = sam
+
+        # DNs of the privileged groups themselves
+        priv_group_dns: set = {
+            g["dn"].lower()
+            for g in all_groups
+            if g.get("sAMAccountName", "") in privileged_members
+        }
+
+        # Build set of direct privileged user DNs (already known, not nested)
+        direct_priv_user_dns: set = set()
+        for members in privileged_members.values():
+            for dn in members:
+                direct_priv_user_dns.add(dn.lower())
+
+        # Find every group that contains a privileged group as a member
+        # (these outer groups grant indirect privileged access to their user members)
+        nested_findings = []
+        seen_users: set = set()
+
+        for outer_dn, outer_members in dn_to_members.items():
+            if outer_dn in priv_group_dns:
+                continue  # skip the privileged group itself
+            # Check if any member of this outer group is a privileged group
+            contained_priv_groups = [m for m in outer_members if m in priv_group_dns]
+            if not contained_priv_groups:
+                continue
+            outer_sam = dn_to_sam.get(outer_dn, outer_dn)
+            # Users in the outer group get indirect privileged access
+            for member_dn in outer_members:
+                if member_dn in priv_group_dns:
+                    continue  # skip the nested priv group itself
+                if member_dn in dn_to_members:
+                    continue  # skip sub-groups (only flag user accounts)
+                if member_dn in direct_priv_user_dns:
+                    continue  # skip direct members (already known)
+                if member_dn in seen_users:
+                    continue  # deduplicate
+                seen_users.add(member_dn)
+                cn = member_dn.split(",")[0].replace("cn=", "").strip()
+                # Report the path via the containing group
+                priv_sam = dn_to_sam.get(contained_priv_groups[0], contained_priv_groups[0])
+                path = f"{cn} → {outer_sam} → {priv_sam}"
+                nested_findings.append(path)
+
+        if not nested_findings:
+            return []
+        return [{
+            "finding_id":   "PRIV-002-NESTED-PRIV",
+            "category":     "Privileged Access",
+            "severity":     "MEDIUM",
+            "title":        f"{len(nested_findings)} Account(s) Have Indirect Privileged Access",
+            "description": (
+                f"{len(nested_findings)} account(s) reach privileged groups through 2 or more "
+                "levels of group nesting. These accounts have effective privileged access but "
+                "do not appear in direct membership checks — they are easy to overlook during "
+                "access reviews."
+            ),
+            "affected":     nested_findings[:50],
+            "details":      {"count": len(nested_findings)},
+            "remediation": (
+                "1. Review each nested membership chain listed above.\n"
+                "2. Determine whether the indirect access is intentional.\n"
+                "3. Either remove the intermediate group from the privileged group, "
+                "   or remove the user from the intermediate group.\n"
+                "4. Consider flattening group nesting for privileged groups to make "
+                "   access reviews straightforward."
             ),
         }]
