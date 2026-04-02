@@ -997,8 +997,29 @@ class PDFReportGenerator:
                 body_rows = [
                     Paragraph(f"<b>{f.get('title','')}</b>",
                         S("FT", fontSize=11, textColor=CS_DARK, fontName="Helvetica-Bold", spaceAfter=5)),
-                    Paragraph(f.get("description",""), BODY),
                 ]
+
+                # Policy status note (in_remediation only)
+                if f.get("policy_status") == "in_remediation":
+                    pol_style = ParagraphStyle(
+                        "PolicyNote",
+                        parent=styles["Normal"],
+                        fontSize=8,
+                        textColor=colors.HexColor("#0053A4"),
+                        leftIndent=6,
+                        backColor=colors.HexColor("#e8f4fd"),
+                        borderPad=4,
+                        spaceAfter=4,
+                    )
+                    policy_reason = f.get("policy_reason", "")
+                    policy_expires = f.get("policy_expires", "")
+                    exp_str = f" \u2014 expires {policy_expires}" if policy_expires else ""
+                    body_rows.append(Paragraph(
+                        f"&#128295; In remediation: {policy_reason}{exp_str}",
+                        pol_style,
+                    ))
+
+                body_rows.append(Paragraph(f.get("description",""), BODY))
                 affected = f.get("affected",[])
                 if affected:
                     aff_str = ", ".join(str(a) for a in affected[:30])

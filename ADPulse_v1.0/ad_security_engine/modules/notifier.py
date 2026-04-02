@@ -111,12 +111,13 @@ class OutputNotifier:
     #  Public Entry Point                                                  #
     # ------------------------------------------------------------------ #
 
-    def notify(self, findings: list, run_id: str, report_paths: dict, domain_info: dict = None) -> str:
+    def notify(self, findings: list, run_id: str, report_paths: dict,
+               domain_info: dict = None, suppressed_count: int = 0) -> str:
         """
         Run all notification outputs after a scan.
         Returns the path to the generated summary .txt file.
         """
-        self._print_console_summary(findings, run_id, report_paths, domain_info)
+        self._print_console_summary(findings, run_id, report_paths, domain_info, suppressed_count)
         txt_path = self._write_summary_file(findings, run_id, report_paths, domain_info)
         self._write_json_export(findings, run_id, domain_info)
 
@@ -141,7 +142,7 @@ class OutputNotifier:
     #  Console Output                                                      #
     # ------------------------------------------------------------------ #
 
-    def _print_console_summary(self, findings, run_id, report_paths, domain_info):
+    def _print_console_summary(self, findings, run_id, report_paths, domain_info, suppressed_count=0):
         """Print a formatted summary to stdout."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -209,6 +210,12 @@ class OutputNotifier:
             for fmt, p in report_paths.items():
                 print(f"  {_c('BLUE', fmt.upper())}: {p}")
         print()
+        if suppressed_count > 0:
+            print(_c("DIM",
+                f"  {suppressed_count} finding(s) suppressed by policy "
+                f"(accepted_risk/resolved). See policy.json or HTML report audit trail."
+            ))
+            print()
         print(_c("BLUE", "=" * w))
         print()
 
