@@ -137,30 +137,35 @@ The task runs as your current Windows user with integrated AD authentication. No
 
 ## 🔌 Offline / Air-Gapped Deployment
 
-For VMs with **no internet access** (common for read-only AD-joined VMs):
+For VMs with **no internet access and no Python installed** (common for read-only AD-joined VMs):
 
-### Step 1 — Build the offline package (on a machine WITH internet)
+### Step 1 — Build the portable package (on a machine WITH internet)
 ```powershell
 cd ad_security_engine\install
-.\prepare_offline_package.ps1 -OutputDir "D:\Transfer\ADPulse_Offline"
+.\prepare_offline_package.ps1
 ```
-This downloads all Python wheel dependencies and bundles them with the ADPulse source.
+This creates an `ADPulse_Portable` folder containing:
+- **Portable Python** (embeddable distribution — no installer needed)
+- **All dependency wheels** pre-installed
+- **ADPulse source code**
+- **`Run-ADPulse.bat`** — double-click to scan
 
 ### Step 2 — Transfer to the air-gapped VM
-Copy the `ADPulse_Offline` folder via USB drive, file share, or any transfer method available to you.
+Copy the `ADPulse_Portable` folder via:
+- **RDP drive redirection** — access `\\tsclient\C\` from within the RDP session
+- **Network file share** — copy to `\\fileserver\share\`
+- Any other file transfer method your organization allows
 
-### Step 3 — Install on the offline VM
-```powershell
-cd D:\ADPulse_Offline
-.\install_offline.ps1
+### Step 3 — Run on the VM
 ```
+Double-click Run-ADPulse.bat
+```
+On first run it opens `config.ini` for you to fill in your domain controller settings. That's it — **no installation, no Python setup, no admin rights needed**.
 
-This will:
-- Install Python dependencies from the bundled wheels (no internet needed)
-- Copy ADPulse to `C:\ADSecurityEngine`
-- Create a scheduled task for continuous scanning
-
-**Note:** Python 3.10+ must already be installed on the VM. If it isn't, download the [Python embeddable package](https://www.python.org/downloads/) on another machine and extract it to the VM.
+To set up recurring scans as a scheduled task:
+```
+Double-click Install-ScheduledTask.bat
+```
 
 ---
 
