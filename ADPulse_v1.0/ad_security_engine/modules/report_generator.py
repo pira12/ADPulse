@@ -761,7 +761,8 @@ if (window.location.hash) {
 
 class PDFReportGenerator:
 
-    def generate(self, findings, run_id, output_path, company_name="Your Organisation", domain_info=None):
+    def generate(self, findings, run_id, output_path, company_name="Your Organisation",
+                 domain_info=None, suppressed=None):
         try:
             from reportlab.lib.pagesizes import A4
             from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -1367,7 +1368,8 @@ class ReportManager:
             p = str(self.output_dir / f"ADPulse_Report_{ts}.pdf")
             try:
                 paths["pdf"] = PDFReportGenerator().generate(
-                    findings, run_id, p, self.company_name, domain_info)
+                    findings, run_id, p, self.company_name, domain_info,
+                    suppressed=suppressed or [])
             except Exception as e:
                 logger.error(f"PDF generation failed: {e}")
 

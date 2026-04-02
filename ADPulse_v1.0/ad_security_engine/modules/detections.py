@@ -102,7 +102,6 @@ class DetectionEngine:
             "Domain Admins,Enterprise Admins,Schema Admins,Administrators"
         )
         self.privileged_groups = [g.strip() for g in privileged_str.split(",")]
-        self.dormant_admin_days = int(config.get("dormant_admin_days", 90))
 
     # ------------------------------------------------------------------ #
     #  Public Entry Point                                                  #
@@ -1493,10 +1492,12 @@ class DetectionEngine:
                 continue  # disabled accounts are not a login risk
 
             days = _days_since(_to_datetime(u.get("lastLogonTimestamp")))
-            if days is not None and days > self.dormant_admin_days:
+            # days is None means never logged on — treat as dormant (no logon = no telemetry)
+            if days is None or days > self.dormant_admin_days:
                 name = _account_name(u)
                 dormant.append(name)
-                dormant_detail.append(f"{name} ({days}d ago)")
+                label = "never logged on" if days is None else f"{days}d ago"
+                dormant_detail.append(f"{name} ({label})")
 
         if not dormant:
             return []
