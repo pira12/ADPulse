@@ -114,3 +114,41 @@ def test_direct_member_not_nested():
 
 def test_no_groups_no_findings():
     assert engine.detect_nested_privilege([], SAMPLE_PRIVILEGED_MEMBERS) == []
+
+
+# ── Service Accounts in Privileged Groups ───────────────────────────────────
+
+def test_privileged_spn_flagged():
+    """A kerberoastable account that is also in a privileged group → CRITICAL."""
+    kerberoastable = [
+        {
+            "sAMAccountName": "svc-sql",
+            "servicePrincipalName": ["MSSQLSvc/db01:1433"],
+            "dn": "CN=svc-sql,OU=ServiceAccounts,DC=corp,DC=local",
+        }
+    ]
+    priv = {"Domain Admins": ["CN=svc-sql,OU=ServiceAccounts,DC=corp,DC=local"]}
+
+    findings = engine.detect_privileged_spn(kerberoastable, priv)
+    assert len(findings) == 1
+    assert findings[0]["severity"] == "CRITICAL"
+    assert findings[0]["finding_id"] == "KERB-003-PRIVESC-SPN"
+    assert "svc-sql" in findings[0]["affected"]
+
+
+def test_non_privileged_kerberoastable_not_flagged():
+    """A Kerberoastable account that is NOT in any privileged group → not flagged."""
+    kerberoastable = [
+        {
+            "sAMAccountName": "svc-web",
+            "servicePrincipalName": ["HTTP/web01:80"],
+            "dn": "CN=svc-web,OU=ServiceAccounts,DC=corp,DC=local",
+        }
+    ]
+    priv = {"Domain Admins": ["CN=admin1,OU=Users,DC=corp,DC=local"]}
+    assert engine.detect_privileged_spn(kerberoastable, priv) == []
+
+
+def test_privileged_spn_empty_inputs():
+    assert engine.detect_privileged_spn([], SAMPLE_PRIVILEGED_MEMBERS) == []
+    assert engine.detect_privileged_spn(SAMPLE_KERBEROASTABLE, {}) == []
