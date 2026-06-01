@@ -1530,8 +1530,8 @@ class DetectionEngine:
             "details":      {"count": len(flagged)},
             "remediation": (
                 "1. Remove DCSync rights from all non-DC accounts.\n"
-                "2. In ADUC: right-click domain root → Properties → Security → "
-                "   find the account → remove 'Replicating Directory Changes All'.\n"
+                "2. In ADUC: right-click domain root -> Properties -> Security -> "
+                "   find the account -> remove 'Replicating Directory Changes All'.\n"
                 "3. Investigate how this permission was granted and whether a DCSync "
                 "   attack has already occurred (check logs for mimikatz indicators)."
             ),
@@ -1547,7 +1547,7 @@ class DetectionEngine:
         priv_accounts = set()
         for members in privileged_members.values():
             for dn in members:
-                # Extract CN from DN: "CN=admin1,OU=..." → "admin1"
+                # Extract CN from DN: "CN=admin1,OU=..." -> "admin1"
                 cn = dn.split(",")[0].replace("CN=", "").replace("cn=", "").strip().lower()
                 priv_accounts.add(cn)
 
@@ -1601,7 +1601,7 @@ class DetectionEngine:
     def detect_nested_privilege(self, all_groups: list, privileged_members: dict) -> list:
         """
         PRIV-002-NESTED-PRIV: Accounts reaching privileged groups through
-        2+ levels of group nesting (e.g., jsmith → HelpDesk → Domain Admins).
+        2+ levels of group nesting (e.g., jsmith -> HelpDesk -> Domain Admins).
         Only direct members are tracked in privileged_members - indirect paths are missed.
         Uses depth-limited recursion (max 10) to handle multi-level chains and
         guard against circular group memberships.
@@ -1609,7 +1609,7 @@ class DetectionEngine:
         if not all_groups:
             return []
 
-        # Build adjacency map: dn(lower) → list of member DNs(lower)
+        # Build adjacency map: dn(lower) -> list of member DNs(lower)
         dn_to_members: dict[str, list] = {}
         dn_to_sam: dict[str, str] = {}
         for g in all_groups:
@@ -1667,7 +1667,7 @@ class DetectionEngine:
                     for user_dn in sub_users:
                         if user_dn not in direct_priv_user_dns:
                             cn = user_dn.split(",")[0].replace("cn=", "").strip()
-                            path = f"{cn} → {intermediate_sam} → {priv_sam}"
+                            path = f"{cn} -> {intermediate_sam} -> {priv_sam}"
                             nested_findings.append(path)
 
         # Also handle the case where a non-privileged group contains a privileged group as member
@@ -1686,7 +1686,7 @@ class DetectionEngine:
                     for user_dn in members:
                         if user_dn not in dn_to_members and user_dn not in direct_priv_user_dns:
                             cn = user_dn.split(",")[0].replace("cn=", "").strip()
-                            path = f"{cn} → {g_sam} → {priv_sam}"
+                            path = f"{cn} -> {g_sam} -> {priv_sam}"
                             if path not in nested_findings:  # avoid duplicates
                                 nested_findings.append(path)
 

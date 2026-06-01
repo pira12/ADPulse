@@ -9,7 +9,7 @@ server = dc01.company.local
 # ── Domain name ──────────────────────────────────────────────────────
 # Your AD domain's DNS name (used to build the LDAP base DN).
 # WHERE TO FIND: Run "echo %USERDNSDOMAIN%" in cmd, or check
-#                System > "Full computer name" (e.g. PC01.corp.local → corp.local).
+#                System > "Full computer name" (e.g. PC01.corp.local -> corp.local).
 domain = company.local
 
 # ── Authentication ───────────────────────────────────────────────────

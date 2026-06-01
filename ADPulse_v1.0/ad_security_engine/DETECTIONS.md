@@ -536,7 +536,7 @@ To add a new detection:
 
 **Remediation:**
 1. Identify how the permission was granted (deliberate delegation, GPO, legacy tool, or attacker activity).
-2. In ADUC: right-click domain root → Properties → Security → find the account → remove `Replicating Directory Changes All`.
+2. In ADUC: right-click domain root -> Properties -> Security -> find the account -> remove `Replicating Directory Changes All`.
 3. Investigate whether a DCSync attack has already occurred (check DC logs for suspicious replication requests, look for mimikatz indicators).
 
 ---
@@ -560,7 +560,7 @@ To add a new detection:
 
 #### PRIV-002-NESTED-PRIV - Indirect Privileged Access via Group Nesting
 
-**What it detects:** User accounts that are **not direct members** of privileged groups but reach them through one or more intermediate group memberships (e.g., `jsmith → HelpDesk → Domain Admins`).
+**What it detects:** User accounts that are **not direct members** of privileged groups but reach them through one or more intermediate group memberships (e.g., `jsmith -> HelpDesk -> Domain Admins`).
 
 **Why it matters:** Standard AD access reviews check direct group membership. Nested memberships are invisible to tools that do not recurse group trees. An attacker who discovers a nested path can obtain effective privileged access that defenders have not reviewed and may not know exists.
 

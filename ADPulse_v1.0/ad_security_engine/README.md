@@ -1,6 +1,6 @@
-# 🛡️ AD Security Continuous Assessment Engine
+# 🛡️ ADPulse - Active Directory Security Assessment
 
-A **lightweight, automated** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift - just run it on a domain-joined Windows VM with read access to AD.
+A **lightweight, automated** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift. Just run it on a domain-joined Windows VM with read access to AD.
 
 It runs **read-only by default** (LDAP only, standard domain-user privileges). An optional, opt-in SMB module can additionally inspect SYSVOL for Group Policy Preferences passwords - still read-only, but reaching beyond LDAP.
 
@@ -197,7 +197,7 @@ Both produce an `ADPulse_Portable` folder containing:
 ### Step 2 - Transfer to the air-gapped VM via RDP
 
 1. In your RDP client, enable drive redirection:
-   **Local Resources → More → Drives → check your local drive**
+   **Local Resources -> More -> Drives -> check your local drive**
 2. Connect to the VM
 3. Inside the RDP session, open File Explorer and go to `\\tsclient\`
 4. Copy the `ADPulse_Portable` folder to `C:\` on the VM

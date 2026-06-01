@@ -84,7 +84,7 @@ def test_dormant_non_admin_not_flagged():
 # ── Nested Group Privilege ───────────────────────────────────────────────────
 
 def test_nested_privilege_flagged():
-    """jsmith → HelpDesk → Domain Admins should be flagged."""
+    """jsmith -> HelpDesk -> Domain Admins should be flagged."""
     # SAMPLE_GROUPS: HelpDesk has member jsmith AND Domain Admins
     # Domain Admins is a monitored privileged group
     priv = {"Domain Admins": ["CN=admin1,OU=Users,DC=corp,DC=local"]}
@@ -119,7 +119,7 @@ def test_no_groups_no_findings():
 # ── Service Accounts in Privileged Groups ───────────────────────────────────
 
 def test_privileged_spn_flagged():
-    """A kerberoastable account that is also in a privileged group → CRITICAL."""
+    """A kerberoastable account that is also in a privileged group -> CRITICAL."""
     kerberoastable = [
         {
             "sAMAccountName": "svc-sql",
@@ -137,7 +137,7 @@ def test_privileged_spn_flagged():
 
 
 def test_non_privileged_kerberoastable_not_flagged():
-    """A Kerberoastable account that is NOT in any privileged group → not flagged."""
+    """A Kerberoastable account that is NOT in any privileged group -> not flagged."""
     kerberoastable = [
         {
             "sAMAccountName": "svc-web",

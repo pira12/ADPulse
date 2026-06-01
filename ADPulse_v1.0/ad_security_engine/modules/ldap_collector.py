@@ -948,7 +948,7 @@ class LDAPCollector:
             results = []
             for sid_bytes in sid_bytes_list:
                 sid_str = _sid_bytes_to_str(sid_bytes)
-                # Resolve SID → sAMAccountName via LDAP
+                # Resolve SID -> sAMAccountName via LDAP
                 ldap_filter = _sid_bytes_to_ldap_filter(sid_bytes)
                 self.conn.search(
                     self.base_dn,

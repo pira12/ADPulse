@@ -326,7 +326,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             # Optional SMB-based SYSVOL scan (GPP cpassword). Off by default; this is
             # the one capability that reaches beyond LDAP, so it is opt-in via config.
             if cfg.has_section("sysvol") and cfg["sysvol"].get("enabled", "false").lower() == "true":
-                logger.info(f"  → SYSVOL scan enabled for {domain_label}...")
+                logger.info(f"  -> SYSVOL scan enabled for {domain_label}...")
                 try:
                     from modules.sysvol_scanner import SysvolScanner
                     ad_data["sysvol_findings"] = SysvolScanner(ldap_cfg).scan()
@@ -334,7 +334,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
                     logger.warning(f"SYSVOL scan error for {domain_label}: {e}")
 
             logger.info(
-                f"  → Users: {len(ad_data.get('users', []))} | "
+                f"  -> Users: {len(ad_data.get('users', []))} | "
                 f"Computers: {len(ad_data.get('computers', []))} | "
                 f"DCs: {len(ad_data.get('domain_controllers', []))} | "
                 f"Kerberoastable: {len(ad_data.get('kerberoastable', []))} | "
@@ -363,9 +363,9 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         baseline.save_group_members(run_id, primary["privileged_members"])
 
         if previous_run_id:
-            logger.info(f"  → Previous scan found: {previous_run_id[:16]}... (delta detection enabled)")
+            logger.info(f"  -> Previous scan found: {previous_run_id[:16]}... (delta detection enabled)")
         else:
-            logger.info("  → No previous baseline. First scan - delta detections next time.")
+            logger.info("  -> No previous baseline. First scan - delta detections next time.")
 
         # ── Step 4: Run Detections ───────────────────────────────────────
         logger.info("Step 4/6: Running security detections...")
@@ -395,7 +395,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         baseline.save_findings(run_id, all_findings)
         findings = baseline.get_findings_for_run(run_id)
 
-        # Apply policy (accepted_risk → suppressed, in_remediation → badge, resolved → audit trail)
+        # Apply policy (accepted_risk -> suppressed, in_remediation -> badge, resolved -> audit trail)
         from modules.policy_manager import PolicyManager
         policy_path = cfg.get("policy", "policy_path", fallback="./policy.json")
         pm = PolicyManager(policy_path)
@@ -425,7 +425,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             sev = f.get("severity", "INFO")
             counts[sev] = counts.get(sev, 0) + 1
         logger.info(
-            f"  → Findings: CRITICAL={counts.get('CRITICAL',0)} | "
+            f"  -> Findings: CRITICAL={counts.get('CRITICAL',0)} | "
             f"HIGH={counts.get('HIGH',0)} | MEDIUM={counts.get('MEDIUM',0)} | "
             f"LOW={counts.get('LOW',0)} | INFO={counts.get('INFO',0)}"
         )
@@ -440,7 +440,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             suppressed=suppressed_findings,
         )
         for fmt, path in report_paths.items():
-            logger.info(f"  → {fmt.upper()} report: {path}")
+            logger.info(f"  -> {fmt.upper()} report: {path}")
 
         # ── Step 6: Output Summary & Notifications ────────────────────────
         logger.info("Step 6/6: Generating output summary...")

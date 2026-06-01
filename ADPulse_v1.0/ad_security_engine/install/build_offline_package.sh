@@ -27,7 +27,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 echo ""
 echo -e "${CYAN}${BOLD}=======================================================${NC}"
-echo -e "${CYAN}${BOLD}   ADPulse - Offline Package Builder (Linux → Windows) ${NC}"
+echo -e "${CYAN}${BOLD}   ADPulse - Offline Package Builder (Linux -> Windows) ${NC}"
 echo -e "${CYAN}${BOLD}   Bundles portable Python + all dependencies          ${NC}"
 echo -e "${CYAN}${BOLD}=======================================================${NC}"
 echo ""
@@ -49,7 +49,7 @@ python3 -m pip --version &>/dev/null || {
     exit 1
 }
 
-# Derive short version string: 3.12.7 → 312
+# Derive short version string: 3.12.7 -> 312
 PY_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
 PY_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
 PY_SHORT="${PY_MAJOR}${PY_MINOR}"
@@ -149,7 +149,7 @@ echo "  (Extracts wheels directly into site-packages - no pip needed on the VM)"
 
 for wheel in "$WHEEL_DIR"/*.whl; do
     whl_name=$(basename "$wheel")
-    echo "    → $whl_name"
+    echo "    -> $whl_name"
     # Wheels are zip files. Extract everything into site-packages.
     # The dist-info/ and package dirs land correctly at the top level.
     unzip -q -o "$wheel" -d "$SITE_PKG"
@@ -293,7 +293,7 @@ echo "    Install-ScheduledTask.bat  Set up recurring automated scans"
 echo ""
 echo -e "${YELLOW}  Transfer to the air-gapped VM via RDP:${NC}"
 echo "    1. In your RDP client, go to:"
-echo "       Local Resources → More → Drives → check your local drive"
+echo "       Local Resources -> More -> Drives -> check your local drive"
 echo "    2. Connect to the VM"
 echo "    3. Inside the RDP session, open File Explorer and navigate to:"
 echo "       \\\\tsclient\\  (you'll see your local drives listed)"
@@ -301,7 +301,7 @@ echo "    4. Copy the ADPulse_Portable folder to C:\\ on the VM"
 echo ""
 echo -e "${YELLOW}  On the Windows VM (no install steps needed):${NC}"
 echo "    1. Double-click Run-ADPulse.bat"
-echo "       → On first run it creates config.ini and opens it in Notepad"
+echo "       -> On first run it creates config.ini and opens it in Notepad"
 echo "    2. Fill in your domain controller (server = dc01.corp.local, domain = corp.local)"
 echo "    3. Double-click Run-ADPulse.bat again - it scans and saves reports to output\\"
 echo ""
