@@ -27,14 +27,24 @@ called from any report generator or the baseline trend builder.
 
 from typing import Iterable
 
-# Points contributed to a pillar by a single finding of each severity.
-# Tuned so that one CRITICAL alone pushes a pillar into the CRITICAL band (>=70),
-# while a handful of MEDIUMs accumulate gradually.
+# A pillar's score is max(floor-of-worst-severity, sum-of-points), capped at 100.
+#
+# The FLOOR guarantees a single high-impact finding sets the right band on its own
+# (one CRITICAL such as ESC1/DCSync => CRITICAL), while POINTS add magnitude as more
+# findings accumulate. LOW points are deliberately tiny so that a domain with many
+# stale (LOW) objects does not falsely register as CRITICAL.
+SEVERITY_FLOOR = {
+    "CRITICAL": 75,   # CRITICAL band (>=70)
+    "HIGH":     50,   # HIGH band (>=40)
+    "MEDIUM":   25,   # MEDIUM band (>=20)
+    "LOW":      5,
+    "INFO":     0,
+}
 SEVERITY_POINTS = {
-    "CRITICAL": 40,
-    "HIGH":     20,
+    "CRITICAL": 75,
+    "HIGH":     25,
     "MEDIUM":   10,
-    "LOW":      3,
+    "LOW":      1,
     "INFO":     0,
 }
 
@@ -145,6 +155,7 @@ def compute(findings: Iterable[dict]) -> dict:
 
     severity_counts = {s: 0 for s in SEVERITY_POINTS}
     pillar_points = {p: 0 for p in PILLARS}
+    pillar_floor = {p: 0 for p in PILLARS}
     pillar_counts = {p: 0 for p in PILLARS}
     pillar_worst = {p: None for p in PILLARS}
 
@@ -158,6 +169,7 @@ def compute(findings: Iterable[dict]) -> dict:
 
         pillar = pillar_for(f)
         pillar_points[pillar] += SEVERITY_POINTS.get(sev, 0)
+        pillar_floor[pillar] = max(pillar_floor[pillar], SEVERITY_FLOOR.get(sev, 0))
         pillar_counts[pillar] += 1
 
         # Track the worst severity seen in this pillar
@@ -167,7 +179,7 @@ def compute(findings: Iterable[dict]) -> dict:
 
     pillars = {
         p: {
-            "score": min(pillar_points[p], 100),
+            "score": min(max(pillar_floor[p], pillar_points[p]), 100),
             "findings": pillar_counts[p],
             "worst": pillar_worst[p],
         }

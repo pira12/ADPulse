@@ -151,10 +151,10 @@ class OutputNotifier:
             sev = f.get("severity", "INFO")
             counts[sev] = counts.get(sev, 0) + 1
 
-        risk_score = min(
-            counts["CRITICAL"]*40 + counts["HIGH"]*15 + counts["MEDIUM"]*5 + counts["LOW"]*1, 100
-        )
-        risk_label = ("CRITICAL" if risk_score>=70 else "HIGH" if risk_score>=40 else "MEDIUM" if risk_score>=20 else "LOW")
+        from modules import scoring
+        _model = scoring.compute(findings)
+        risk_score = _model["overall_score"]
+        risk_label = _model["risk_label"]
 
         w = 70
         print()
@@ -237,13 +237,10 @@ class OutputNotifier:
             sev = f.get("severity","INFO")
             counts[sev] = counts.get(sev, 0) + 1
 
-        risk_score = min(
-            counts["CRITICAL"]*40 + counts["HIGH"]*15 + counts["MEDIUM"]*5 + counts["LOW"]*1, 100
-        )
-        risk_label = (
-            "CRITICAL" if risk_score>=70 else "HIGH" if risk_score>=40 else
-            "MEDIUM" if risk_score>=20 else "LOW"
-        )
+        from modules import scoring
+        _model = scoring.compute(findings)
+        risk_score = _model["overall_score"]
+        risk_label = _model["risk_label"]
 
         lines = []
         sep = "=" * 72
@@ -541,10 +538,8 @@ class OutputNotifier:
                 counts[f.get("severity", "INFO")] = counts.get(f.get("severity", "INFO"), 0) + 1
 
             domain_name = (domain_info or {}).get("name", "Unknown Domain")
-            risk_score = min(
-                counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
-                counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
-            )
+            from modules import scoring
+            risk_score = scoring.overall_score(findings)
 
             subject = f"ADPulse: {domain_name} - Risk {risk_score}/100"
             if counts.get("CRITICAL", 0) > 0:

@@ -31,11 +31,21 @@ def test_scoring_overall_is_worst_pillar():
         {"finding_id": "ACCT-001-STALE", "severity": "LOW", "category": "Account Hygiene"},
     ]
     model = scoring.compute(findings)
-    # CRITICAL anomaly => Anomalies pillar at 40, overall = max pillar
-    assert model["overall_score"] == 40
-    assert model["pillars"]["Anomalies"]["score"] == 40
-    assert model["pillars"]["Stale Objects"]["score"] == 3
-    assert model["risk_label"] == "HIGH"
+    # A single CRITICAL (domain-compromise) puts its pillar in the CRITICAL band;
+    # overall score is the worst pillar.
+    assert model["overall_score"] == 75
+    assert model["pillars"]["Anomalies"]["score"] == 75
+    assert model["pillars"]["Stale Objects"]["score"] == 5
+    assert model["risk_label"] == "CRITICAL"
+
+
+def test_scoring_many_low_findings_do_not_explode():
+    """A domain with many stale (LOW) objects should not register as CRITICAL."""
+    findings = [{"finding_id": f"ACCT-001-{i}", "severity": "LOW",
+                 "category": "Account Hygiene"} for i in range(30)]
+    model = scoring.compute(findings)
+    assert model["overall_score"] < 70           # not CRITICAL
+    assert model["pillars"]["Stale Objects"]["score"] == 30  # 30 * 1 point
 
 
 def test_scoring_maturity_level_tracks_worst_severity():
