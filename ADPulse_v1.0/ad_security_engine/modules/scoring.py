@@ -13,7 +13,7 @@ assessment model on top:
         - Stale Objects
         - Anomalies
     Each pillar is scored 0-100 (higher = worse). The overall domain score is the
-    MAXIMUM of the four pillar scores — a single critical weakness in any one area
+    MAXIMUM of the four pillar scores - a single critical weakness in any one area
     is enough to make the whole domain high-risk. This mirrors the methodology used
     by established AD assessment tools and avoids a flood of low findings masking a
     single domain-compromise issue.
@@ -101,16 +101,16 @@ _MATURITY_BY_WORST = {
     "LOW":      4,
 }
 MATURITY_LABELS = {
-    1: "Level 1 — Critical exposure: domain compromise is likely with minimal effort.",
-    2: "Level 2 — High exposure: significant attack paths exist.",
-    3: "Level 3 — Developing: notable weaknesses remain to be hardened.",
-    4: "Level 4 — Managed: only minor hygiene issues outstanding.",
-    5: "Level 5 — Optimised: no material findings detected.",
+    1: "Level 1 - Critical exposure: domain compromise is likely with minimal effort.",
+    2: "Level 2 - High exposure: significant attack paths exist.",
+    3: "Level 3 - Developing: notable weaknesses remain to be hardened.",
+    4: "Level 4 - Managed: only minor hygiene issues outstanding.",
+    5: "Level 5 - Optimised: no material findings detected.",
 }
 
 
 def _strip_domain_suffix(finding_id: str) -> str:
-    """Multi-domain runs append '@domain' to finding_ids — ignore it for mapping."""
+    """Multi-domain runs append '@domain' to finding_ids - ignore it for mapping."""
     return finding_id.split("@", 1)[0]
 
 

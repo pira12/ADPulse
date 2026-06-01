@@ -1,7 +1,7 @@
 ldap3>=2.9.1
 reportlab>=4.0.0
 
-# Optional — only needed for the opt-in SMB SYSVOL scan ([sysvol] enabled = true).
+# Optional - only needed for the opt-in SMB SYSVOL scan ([sysvol] enabled = true).
 # ADPulse runs fine without these; the SYSVOL scan degrades gracefully if absent.
 # smbprotocol>=1.10.1   # SMB client used to read SYSVOL for GPP cpassword detection
 # cryptography>=41.0.0  # used only to verify recovered GPP cpassword values

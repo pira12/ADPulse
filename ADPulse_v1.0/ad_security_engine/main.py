@@ -71,7 +71,10 @@ def load_config(config_path: str) -> configparser.ConfigParser:
     config_file = Path(config_path)
     if not config_file.exists():
         print(f"ERROR: Config file not found: {config_path}")
-        print("Copy config.ini.example to config.ini and fill in your settings.")
+        print()
+        print("To get started, create one with:")
+        print("    python main.py --init")
+        print("then open config.ini and fill in your domain controller and domain name.")
         sys.exit(1)
 
     # Warn if config file is world-readable (contains credentials)
@@ -187,7 +190,7 @@ _AD_DATA_DEFAULTS = {
 def _collect_ad_data(collector, scanning_cfg: dict) -> dict:
     """
     Run all AD LDAP queries. Independent queries run in parallel via ThreadPoolExecutor.
-    A failed query logs a warning and returns an empty result for that key — it never
+    A failed query logs a warning and returns an empty result for that key - it never
     aborts the scan.
     """
     expiring_days = int(scanning_cfg.get("expiring_account_days", 30))
@@ -199,7 +202,7 @@ def _collect_ad_data(collector, scanning_cfg: dict) -> dict:
     ]
     max_workers = int(scanning_cfg.get("ldap_threads", 8))
 
-    # All queries are independent — run them all in parallel
+    # All queries are independent - run them all in parallel
     tasks = {
         "users":                    lambda: collector.get_all_users(),
         "kerberoastable":           lambda: collector.get_kerberoastable_accounts(),
@@ -362,7 +365,7 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
         if previous_run_id:
             logger.info(f"  → Previous scan found: {previous_run_id[:16]}... (delta detection enabled)")
         else:
-            logger.info("  → No previous baseline. First scan — delta detections next time.")
+            logger.info("  → No previous baseline. First scan - delta detections next time.")
 
         # ── Step 4: Run Detections ───────────────────────────────────────
         logger.info("Step 4/6: Running security detections...")
@@ -477,6 +480,64 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 #  CLI Commands
 # ─────────────────────────────────────────────────────────────────────────────
+
+def cmd_init(config_path: str):
+    """
+    Create a starter config.ini so first-time setup is a single command.
+    Copies config.ini.example when present, otherwise writes a minimal template.
+    Never overwrites an existing config.
+    """
+    import os
+    target = Path(config_path)
+    if target.exists():
+        print(f"  {target} already exists - not overwriting.")
+        print("  Edit it directly, or delete it first to regenerate.")
+        return
+
+    example = Path(__file__).parent / "config.ini.example"
+    if example.exists():
+        target.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    else:
+        target.write_text(
+            "[ldap]\n"
+            "server = dc01.company.local\n"
+            "domain = company.local\n"
+            "username =\n"
+            "password =\n"
+            "port = 389\n"
+            "use_ssl = false\n"
+            "timeout = 30\n\n"
+            "[scanning]\n"
+            "privileged_groups = Domain Admins,Enterprise Admins,Schema Admins,Administrators\n\n"
+            "[output]\n"
+            "min_summary_severity = MEDIUM\n\n"
+            "[reporting]\n"
+            "output_dir = ./output\n"
+            "company_name = Your Company\n\n"
+            "[database]\n"
+            "db_path = ./ad_baseline.db\n\n"
+            "[logging]\n"
+            "log_file = ./logs/ad_security_engine.log\n"
+            "log_level = INFO\n",
+            encoding="utf-8",
+        )
+
+    # The config can hold credentials, so lock it down on POSIX systems.
+    try:
+        if os.name == "posix":
+            os.chmod(target, 0o600)
+    except OSError:
+        pass
+
+    print(f"  Created {target}")
+    print()
+    print("  Next steps:")
+    print("   1. Open config.ini and set 'server' (your domain controller) and 'domain'.")
+    print("      Leave username/password blank to use your current Windows login.")
+    print("   2. Test the connection:  python main.py --test-connection")
+    print("   3. Run your first scan:  python main.py")
+    print()
+
 
 def cmd_test_connection(cfg: configparser.ConfigParser):
     from modules.ldap_collector import LDAPCollector
@@ -672,6 +733,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  python main.py --init                   Create a starter config.ini (first run)
   python main.py                          Run a single scan
   python main.py --test-connection        Test LDAP connection only
   python main.py --report-only            Regenerate report from last scan
@@ -683,6 +745,10 @@ Examples:
     parser.add_argument(
         "--config", default="config.ini",
         help="Path to configuration file (default: config.ini)",
+    )
+    parser.add_argument(
+        "--init", action="store_true",
+        help="Create a starter config.ini and exit (first-time setup)",
     )
     parser.add_argument(
         "--test-connection", action="store_true",
@@ -722,6 +788,19 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    print("""
+╔══════════════════════════════════════════════════════════════════╗
+║          ADPulse - Active Directory Security Assessment          ║
+║          Low-privilege  |  Read-only  |  Automated               ║
+╚══════════════════════════════════════════════════════════════════╝
+""")
+
+    # --init runs before config loading, since its whole job is to create the config.
+    if args.init:
+        cmd_init(args.config)
+        return
+
     cfg = load_config(args.config)
 
     # Setup logging
@@ -732,13 +811,6 @@ Examples:
         max_mb=int(log_cfg.get("max_log_size_mb", 10)),
         backup_count=int(log_cfg.get("log_backup_count", 5)),
     )
-
-    print("""
-╔══════════════════════════════════════════════════════════════════╗
-║        AD Security Continuous Assessment Engine v1.0             ║
-║        Integrated Auth | Read-Only | Automated                   ║
-╚══════════════════════════════════════════════════════════════════╝
-""")
 
     if args.policy:
         action     = args.policy[0]

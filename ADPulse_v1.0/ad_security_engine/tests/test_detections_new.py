@@ -25,7 +25,7 @@ def test_dcsync_flags_non_dc_account():
     domain_acl = [
         {"sam_account_name": "rogue-svc", "sid": "S-1-5-21-1-2-3-500", "dn": "CN=rogue-svc,..."},
     ]
-    domain_controllers = SAMPLE_DOMAIN_CONTROLLERS  # DC01$ — not rogue-svc
+    domain_controllers = SAMPLE_DOMAIN_CONTROLLERS  # DC01$ - not rogue-svc
 
     findings = engine.detect_dcsync_rights(domain_acl, domain_controllers)
     assert len(findings) == 1
@@ -35,7 +35,7 @@ def test_dcsync_flags_non_dc_account():
 
 
 def test_dcsync_ignores_dc_accounts():
-    """Domain controllers with DCSync rights are expected — not flagged."""
+    """Domain controllers with DCSync rights are expected - not flagged."""
     domain_acl = [
         {"sam_account_name": "DC01$", "sid": "S-1-5-21-1-2-3-1000", "dn": "CN=DC01,..."},
     ]

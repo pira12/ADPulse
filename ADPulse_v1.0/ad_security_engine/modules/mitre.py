@@ -90,7 +90,7 @@ def techniques_for(finding_id: str) -> list:
 def attach(findings: list) -> list:
     """
     Idempotently attach a 'mitre' list to each finding (in place) and return it.
-    Safe to call multiple times — derived purely from finding_id.
+    Safe to call multiple times - derived purely from finding_id.
     """
     for f in findings or []:
         f["mitre"] = techniques_for(f.get("finding_id", ""))

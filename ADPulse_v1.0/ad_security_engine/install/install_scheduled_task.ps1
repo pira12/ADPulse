@@ -5,7 +5,7 @@
 .DESCRIPTION
     Creates a scheduled task that runs the scanner every N hours.
     By default, runs as the currently logged-in user using integrated Windows
-    authentication — no service account needed. Just run this on a domain-joined
+    authentication - no service account needed. Just run this on a domain-joined
     VM where your user has read access to AD.
 
 .PARAMETER PythonPath
@@ -147,7 +147,7 @@ $Settings = New-ScheduledTaskSettingsSet `
     -RunOnlyIfNetworkAvailable `
     -MultipleInstances IgnoreNew
 
-# Run as the current logged-in user — uses integrated Windows auth
+# Run as the current logged-in user - uses integrated Windows auth
 $Principal = New-ScheduledTaskPrincipal `
     -UserId "$env:USERDOMAIN\$env:USERNAME" `
     -LogonType S4U `

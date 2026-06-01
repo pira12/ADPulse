@@ -2,7 +2,7 @@
 # ── Domain Controller ────────────────────────────────────────────────
 # Hostname or IP of your Domain Controller.
 # WHERE TO FIND: Run "nltest /dsgetdc:" or "echo %LOGONSERVER%" in cmd on your VM.
-#                Or open "Active Directory Users and Computers" — the connected DC
+#                Or open "Active Directory Users and Computers" - the connected DC
 #                is shown in the tree root, e.g. "dc01.corp.local".
 server = dc01.company.local
 
@@ -14,7 +14,7 @@ domain = company.local
 
 # ── Authentication ───────────────────────────────────────────────────
 # Leave username AND password BLANK to use integrated Windows authentication.
-# This uses the logged-in Windows user's Kerberos session — no service account needed.
+# This uses the logged-in Windows user's Kerberos session - no service account needed.
 # Just run ADPulse on a domain-joined Windows VM where your user has read access to AD.
 #
 # Only fill these in if you need to run as a different user or from a non-domain machine.
@@ -177,12 +177,12 @@ log_backup_count = 5
 #
 # Requirements:
 #   * pip install smbprotocol         (pure-Python SMB client)
-#   * pip install cryptography        (optional — only used to verify cpassword
+#   * pip install cryptography        (optional - only used to verify cpassword
 #                                       values; presence is reported either way)
 #   * Read access to \\<server>\SYSVOL (any domain user has this by default)
 #
 # Security: the scan is strictly read-only, bounded in files/size, and never
-# writes recovered plaintext passwords into reports — it reports the affected
+# writes recovered plaintext passwords into reports - it reports the affected
 # account and that the credential is recoverable.
 #
 # [sysvol]

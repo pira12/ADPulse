@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-    Builds a fully self-contained ADPulse package — includes portable Python.
+    Builds a fully self-contained ADPulse package - includes portable Python.
 
 .DESCRIPTION
     Downloads Python embeddable (portable, no installer), pip, and all dependency
     wheels, then bundles everything with the ADPulse source into a single folder.
 
-    The resulting package can run on ANY Windows machine — no Python installation,
+    The resulting package can run on ANY Windows machine - no Python installation,
     no internet, and no admin rights required.
 
     Transfer the folder to the air-gapped VM via:
@@ -42,7 +42,7 @@ $ErrorActionPreference = "Stop"
 Write-Host ""
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host "   ADPulse - Portable Package Builder                   " -ForegroundColor Cyan
-Write-Host "   (Bundles Python + dependencies — zero install needed) " -ForegroundColor Cyan
+Write-Host "   (Bundles Python + dependencies - zero install needed) " -ForegroundColor Cyan
 Write-Host "=======================================================" -ForegroundColor Cyan
 Write-Host ""
 

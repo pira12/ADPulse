@@ -226,7 +226,7 @@ class OutputNotifier:
     def _write_summary_file(self, findings, run_id, report_paths, domain_info) -> str:
         """
         Write a plain-text summary .txt file.
-        This is the primary sharing artifact — paste into Teams / email / ticket.
+        This is the primary sharing artifact - paste into Teams / email / ticket.
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -639,6 +639,6 @@ class OutputNotifier:
             logger.info("Windows Event Log entry written (source: ADPulse, event ID: 1001).")
 
         except ImportError:
-            logger.debug("pywin32 not installed — Windows Event Log skipped.")
+            logger.debug("pywin32 not installed - Windows Event Log skipped.")
         except Exception as e:
             logger.warning(f"Could not write Windows Event Log: {e}")

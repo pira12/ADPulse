@@ -65,8 +65,8 @@ enabled in config.
 | GPP-001-CPASSWORD | Password Hygiene | CRITICAL | Recoverable GPP passwords in SYSVOL (optional SMB scan) |
 
 > Every finding is additionally tagged with its **MITRE ATT&CK** technique(s) and rolled up into a
-> **4-pillar risk model** (Privileged Accounts, Trusts, Stale Objects, Anomalies). The overall 0–100
-> score is the *worst* pillar, and a 1–5 maturity level is derived from the most severe finding.
+> **4-pillar risk model** (Privileged Accounts, Trusts, Stale Objects, Anomalies). The overall 0-100
+> score is the *worst* pillar, and a 1-5 maturity level is derived from the most severe finding.
 
 ---
 
@@ -74,7 +74,7 @@ enabled in config.
 
 ### Kerberos Attack Path Detections
 
-#### KERB-001 — Kerberoastable Accounts
+#### KERB-001 - Kerberoastable Accounts
 
 **What it detects:** User accounts with Service Principal Names (SPNs) set.
 
@@ -88,18 +88,18 @@ enabled in config.
 ```
 
 **Severity Logic:**
-- `CRITICAL` — Account has `adminCount=1` (privileged)
-- `HIGH` — Standard service account with SPN
+- `CRITICAL` - Account has `adminCount=1` (privileged)
+- `HIGH` - Standard service account with SPN
 
 **Remediation:**
 1. Remove unnecessary SPNs from privileged accounts
-2. Migrate to Group Managed Service Accounts (gMSA) — auto-rotating 120+ char passwords
+2. Migrate to Group Managed Service Accounts (gMSA) - auto-rotating 120+ char passwords
 3. Ensure all remaining service account passwords are 25+ characters
 4. Enable AES Kerberos encryption and disable RC4
 
 ---
 
-#### KERB-002 — AS-REP Roastable Accounts
+#### KERB-002 - AS-REP Roastable Accounts
 
 **What it detects:** Accounts with Kerberos pre-authentication disabled (UAC flag `0x400000`).
 
@@ -113,20 +113,20 @@ enabled in config.
 ```
 
 **Severity Logic:**
-- `CRITICAL` — Any affected account has `adminCount=1`
-- `HIGH` — All affected accounts are standard users
+- `CRITICAL` - Any affected account has `adminCount=1`
+- `HIGH` - All affected accounts are standard users
 
 ---
 
-#### KERB-003 — KRBTGT Password Age
+#### KERB-003 - KRBTGT Password Age
 
 **What it detects:** The KRBTGT account password has not been rotated in over 180 days.
 
 **Why it matters:** The KRBTGT account is used to sign all Kerberos TGTs in the domain. If an attacker obtains the KRBTGT hash, they can forge Golden Tickets granting unrestricted domain access. Regular rotation limits the window of exposure. Microsoft recommends rotating the KRBTGT password at least every 180 days.
 
 **Severity Logic:**
-- `CRITICAL` — Password age exceeds 365 days
-- `HIGH` — Password age exceeds 180 days
+- `CRITICAL` - Password age exceeds 365 days
+- `HIGH` - Password age exceeds 180 days
 
 **Remediation:**
 1. Rotate the KRBTGT password twice (with a 12+ hour gap between rotations to allow replication)
@@ -134,7 +134,7 @@ enabled in config.
 
 ---
 
-#### KERB-004 — Duplicate Service Principal Names
+#### KERB-004 - Duplicate Service Principal Names
 
 **What it detects:** Multiple accounts that share the same Service Principal Name (SPN).
 
@@ -148,7 +148,7 @@ enabled in config.
 
 ---
 
-#### KERB-005 — DES-Only Encryption Accounts
+#### KERB-005 - DES-Only Encryption Accounts
 
 **What it detects:** Accounts configured to use DES-only Kerberos encryption (UAC flag `0x200000`).
 
@@ -165,7 +165,7 @@ enabled in config.
 
 ### Delegation Detections
 
-#### DELEG-001 — Unconstrained Kerberos Delegation
+#### DELEG-001 - Unconstrained Kerberos Delegation
 
 **What it detects:** Non-DC accounts with the `TRUSTED_FOR_DELEGATION` flag (UAC `0x80000`).
 
@@ -177,43 +177,43 @@ enabled in config.
 
 ---
 
-#### DELEG-002 — Constrained Delegation
+#### DELEG-002 - Constrained Delegation
 
 **What it detects:** Accounts with `msDS-AllowedToDelegateTo` attribute set.
 
 **Why it matters:** Constrained delegation limits which services an account can delegate to, but a compromised account can still be used to access those specific services as any user. With protocol transition (S4U2Self + S4U2Proxy), the account doesn't even need the target user to authenticate first.
 
-**Severity:** `MEDIUM` — Lower risk than unconstrained but should be audited.
+**Severity:** `MEDIUM` - Lower risk than unconstrained but should be audited.
 
 ---
 
 ### Password Hygiene Detections
 
-#### PWD-001 — Password Never Expires
+#### PWD-001 - Password Never Expires
 
 **What it detects:** Enabled accounts with `DONT_EXPIRE_PASSWORD` flag (UAC `0x10000`).
 
 **Why it matters:** These accounts bypass password rotation policies. Passwords may be years old, increasing the window for credential theft, reuse, and offline cracking.
 
 **Severity Logic:**
-- `HIGH` — Any affected account has `adminCount=1`
-- `MEDIUM` — All standard accounts
+- `HIGH` - Any affected account has `adminCount=1`
+- `MEDIUM` - All standard accounts
 
 ---
 
-#### PWD-002 — Password Not Required
+#### PWD-002 - Password Not Required
 
 **What it detects:** Accounts with `PASSWD_NOTREQD` flag (UAC `0x20`).
 
 **Why it matters:** This flag allows the account to have an **empty password**. If the password is actually blank, the account can be accessed with just the username. This flag is often set during bulk imports or legacy migrations and forgotten.
 
 **Severity Logic:**
-- `CRITICAL` — Any affected account is privileged
-- `HIGH` — Standard accounts
+- `CRITICAL` - Any affected account is privileged
+- `HIGH` - Standard accounts
 
 ---
 
-#### PWD-003 — Reversible Encryption
+#### PWD-003 - Reversible Encryption
 
 **What it detects:** Accounts with `ENCRYPTED_TEXT_PWD_ALLOWED` flag (UAC `0x80`).
 
@@ -223,7 +223,7 @@ enabled in config.
 
 ---
 
-#### PWD-004 — Passwords in Description Fields
+#### PWD-004 - Passwords in Description Fields
 
 **What it detects:** User accounts whose `description` attribute contains password-related keywords (pass, pwd, wachtwoord, mot de passe, contraseña).
 
@@ -235,31 +235,31 @@ enabled in config.
 
 ### Account Hygiene Detections
 
-#### ACCT-001 — Stale Accounts
+#### ACCT-001 - Stale Accounts
 
 **What it detects:** Enabled user accounts that haven't logged in for longer than the configured threshold (default: 60 days).
 
-**Why it matters:** Stale accounts expand the attack surface. They are often forgotten by their owners, making them prime targets for attackers — compromised credentials go unnoticed because nobody is actively using the account.
+**Why it matters:** Stale accounts expand the attack surface. They are often forgotten by their owners, making them prime targets for attackers - compromised credentials go unnoticed because nobody is actively using the account.
 
 **Severity Logic:**
-- `HIGH` — Inactive for 2x the threshold (very stale)
-- `MEDIUM` — Inactive for 1x the threshold
+- `HIGH` - Inactive for 2x the threshold (very stale)
+- `MEDIUM` - Inactive for 1x the threshold
 
 ---
 
-#### ACCT-002 — Accounts Expiring Soon
+#### ACCT-002 - Accounts Expiring Soon
 
 **What it detects:** User accounts with an `accountExpires` date within the near future (configurable, default 30 days).
 
 **Why it matters:** Provides operational awareness of accounts that will soon expire. Useful for proactive account lifecycle management and avoiding unexpected service disruptions from expired service or contractor accounts.
 
-**Severity:** `INFO` (informational — review for planned expirations)
+**Severity:** `INFO` (informational - review for planned expirations)
 
 ---
 
 ### Privileged Access Detections
 
-#### PRIV-001 — Orphaned adminCount Accounts
+#### PRIV-001 - Orphaned adminCount Accounts
 
 **What it detects:** Accounts with `adminCount=1` that are NOT members of any currently monitored privileged group.
 
@@ -269,19 +269,19 @@ enabled in config.
 
 ---
 
-#### PRIV-002 — SID History
+#### PRIV-002 - SID History
 
 **What it detects:** Accounts with the `sIDHistory` attribute populated.
 
-**Why it matters:** SID History is used during domain migrations to preserve access to resources in the source domain. After migration, leftover entries can be weaponized — an attacker with write access to an account can inject the SID of Domain Admins into SID History, gaining full domain admin rights.
+**Why it matters:** SID History is used during domain migrations to preserve access to resources in the source domain. After migration, leftover entries can be weaponized - an attacker with write access to an account can inject the SID of Domain Admins into SID History, gaining full domain admin rights.
 
 **Severity Logic:**
-- `HIGH` — Any affected account is privileged
-- `MEDIUM` — Standard accounts
+- `HIGH` - Any affected account is privileged
+- `MEDIUM` - Standard accounts
 
 ---
 
-#### PRIV-003 — Protected Users Coverage
+#### PRIV-003 - Protected Users Coverage
 
 **What it detects:** Privileged accounts that are NOT members of the `Protected Users` security group.
 
@@ -302,7 +302,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 ### Domain Configuration Detections
 
-#### CONF-001 — Machine Account Quota
+#### CONF-001 - Machine Account Quota
 
 **What it detects:** `ms-DS-MachineAccountQuota` value greater than 0.
 
@@ -315,34 +315,34 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
-#### CONF-002 — Computers Without LAPS
+#### CONF-002 - Computers Without LAPS
 
 **What it detects:** Computer accounts without the `ms-Mcs-AdmPwdExpirationTime` attribute (indicating LAPS is not deployed).
 
-**Why it matters:** Without LAPS, local administrator passwords are often identical across all workstations (set during imaging). Compromising one machine's local admin password gives the attacker local admin access to every machine with the same password — trivial lateral movement via pass-the-hash.
+**Why it matters:** Without LAPS, local administrator passwords are often identical across all workstations (set during imaging). Compromising one machine's local admin password gives the attacker local admin access to every machine with the same password - trivial lateral movement via pass-the-hash.
 
 **Severity Logic:**
-- `HIGH` — LAPS coverage below 50%
-- `MEDIUM` — LAPS coverage above 50% but not complete
+- `HIGH` - LAPS coverage below 50%
+- `MEDIUM` - LAPS coverage above 50% but not complete
 
 ---
 
-#### CONF-003 — Short Tombstone Lifetime
+#### CONF-003 - Short Tombstone Lifetime
 
 **What it detects:** The AD tombstone lifetime is set below the recommended 180 days.
 
 **Why it matters:** The tombstone lifetime determines how long deleted objects are retained before permanent removal. A short tombstone lifetime can cause lingering objects and replication failures if a domain controller is offline longer than the tombstone period. It also reduces the window for recovering accidentally deleted objects.
 
 **Severity Logic:**
-- `HIGH` — Tombstone lifetime below 60 days
-- `MEDIUM` — Tombstone lifetime between 60-179 days
+- `HIGH` - Tombstone lifetime below 60 days
+- `MEDIUM` - Tombstone lifetime between 60-179 days
 
 **Remediation:**
 1. Increase the tombstone lifetime to at least 180 days via `CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration`
 
 ---
 
-#### TRUST-001 — Trust Relationships Without SID Filtering
+#### TRUST-001 - Trust Relationships Without SID Filtering
 
 **What it detects:** Inter-domain or inter-forest trust relationships that do not have SID filtering (quarantine) enabled.
 
@@ -357,31 +357,31 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
-#### TRUST-002 — Trust Relationship Inventory
+#### TRUST-002 - Trust Relationship Inventory
 
 **What it detects:** Enumerates all trust relationships configured in the domain.
 
 **Why it matters:** Provides a complete inventory of trust relationships for security review. Trust relationships expand the authentication boundary and should be regularly audited to ensure only necessary trusts exist with appropriate security settings.
 
-**Severity:** `INFO` (informational — review for completeness and necessity)
+**Severity:** `INFO` (informational - review for completeness and necessity)
 
 ---
 
 ### Password Policy Detections
 
-#### POL-002 — Weak Minimum Password Length
+#### POL-002 - Weak Minimum Password Length
 
 **What it detects:** Domain password policy with minimum length below 12 characters.
 
 **Severity Logic:**
-- `HIGH` — Minimum length below 8
-- `MEDIUM` — Minimum length 8-11
+- `HIGH` - Minimum length below 8
+- `MEDIUM` - Minimum length 8-11
 
 **Reference:** NIST SP 800-63B recommends minimum 12 characters.
 
 ---
 
-#### POL-004 — Account Lockout Disabled
+#### POL-004 - Account Lockout Disabled
 
 **What it detects:** Account lockout threshold set to 0 (disabled).
 
@@ -391,7 +391,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
-#### POL-006 — FGPPs With No Targets
+#### POL-006 - FGPPs With No Targets
 
 **What it detects:** Fine-Grained Password Policies (FGPPs) that have no users or groups assigned to them via `msDS-PSOAppliesTo`.
 
@@ -405,7 +405,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
-#### POL-007 — Privileged Groups Not Covered by FGPP
+#### POL-007 - Privileged Groups Not Covered by FGPP
 
 **What it detects:** Privileged groups (Domain Admins, Enterprise Admins, etc.) that are not targeted by any Fine-Grained Password Policy enforcing stronger password requirements than the default domain policy.
 
@@ -421,7 +421,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 ### Infrastructure Detections
 
-#### COMP-001 — Stale Computer Accounts
+#### COMP-001 - Stale Computer Accounts
 
 **What it detects:** Computer accounts that haven't authenticated in over 2x the stale threshold.
 
@@ -429,7 +429,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 ---
 
-#### OS-001 — End-of-Life Operating Systems
+#### OS-001 - End-of-Life Operating Systems
 
 **What it detects:** Computers running unsupported operating systems.
 
@@ -445,7 +445,7 @@ Privileged accounts not in this group are missing these critical protections.
 
 These detections require at least two scans (a baseline to compare against).
 
-#### DELTA-PRIV-ADD — Privileged Group Additions
+#### DELTA-PRIV-ADD - Privileged Group Additions
 
 **What it detects:** New members added to monitored privileged groups since the last scan.
 
@@ -457,7 +457,7 @@ These detections require at least two scans (a baseline to compare against).
 
 ---
 
-#### DELTA-PRIV-REM — Privileged Group Removals
+#### DELTA-PRIV-REM - Privileged Group Removals
 
 **What it detects:** Members removed from monitored privileged groups since the last scan.
 
@@ -467,11 +467,11 @@ These detections require at least two scans (a baseline to compare against).
 
 ---
 
-#### DELTA-ACCT-NEW — New User Accounts
+#### DELTA-ACCT-NEW - New User Accounts
 
 **What it detects:** User accounts that exist in the current scan but not in the previous scan.
 
-**Severity:** `INFO` (informational — review for legitimacy)
+**Severity:** `INFO` (informational - review for legitimacy)
 
 ---
 
@@ -522,13 +522,13 @@ To add a new detection:
 
 ---
 
-### Privileged Access — New Detections
+### Privileged Access - New Detections
 
-#### ACL-001-DCSYNC — Non-DC Accounts with DCSync Rights
+#### ACL-001-DCSYNC - Non-DC Accounts with DCSync Rights
 
 **What it detects:** Non-domain-controller accounts that hold the `DS-Replication-Get-Changes-All` extended right on the domain root object.
 
-**Why it matters:** This right, combined with `DS-Replication-Get-Changes`, allows the holder to replicate all password hashes from a Domain Controller — including krbtgt and all user accounts — using the DCSync technique (e.g., Mimikatz `lsadump::dcsync`). No physical access to a DC is required. Any account holding this right is effectively a silent, unchecked Domain Admin.
+**Why it matters:** This right, combined with `DS-Replication-Get-Changes`, allows the holder to replicate all password hashes from a Domain Controller - including krbtgt and all user accounts - using the DCSync technique (e.g., Mimikatz `lsadump::dcsync`). No physical access to a DC is required. Any account holding this right is effectively a silent, unchecked Domain Admin.
 
 **How it works:** ADPulse reads the binary security descriptor (`nTSecurityDescriptor`) of the domain root object via LDAP. It parses the DACL to find `ALLOWED_OBJECT_ACE` entries matching the DCSync GUIDs, then resolves each granting SID to a `sAMAccountName`. Domain controllers are excluded from findings as expected holders.
 
@@ -541,11 +541,11 @@ To add a new detection:
 
 ---
 
-#### PRIV-001-DORMANT-ADMIN — Dormant Privileged Accounts
+#### PRIV-001-DORMANT-ADMIN - Dormant Privileged Accounts
 
 **What it detects:** Enabled accounts in privileged groups (Domain Admins, Enterprise Admins, etc.) that have not authenticated in more than `dormant_admin_days` days (default: 90), **or have never logged on at all**.
 
-**Why it matters:** Unused admin accounts are high-value targets. If credentials are compromised (password reuse, phishing, breach), the attacker can use the account without triggering any unusual activity alerts — the account was already silent. Never-logged-on admin accounts are especially dangerous: they may have been created during setup and forgotten, with a default or known password.
+**Why it matters:** Unused admin accounts are high-value targets. If credentials are compromised (password reuse, phishing, breach), the attacker can use the account without triggering any unusual activity alerts - the account was already silent. Never-logged-on admin accounts are especially dangerous: they may have been created during setup and forgotten, with a default or known password.
 
 **Severity:** `HIGH`
 
@@ -558,7 +558,7 @@ To add a new detection:
 
 ---
 
-#### PRIV-002-NESTED-PRIV — Indirect Privileged Access via Group Nesting
+#### PRIV-002-NESTED-PRIV - Indirect Privileged Access via Group Nesting
 
 **What it detects:** User accounts that are **not direct members** of privileged groups but reach them through one or more intermediate group memberships (e.g., `jsmith → HelpDesk → Domain Admins`).
 
@@ -576,7 +576,7 @@ To add a new detection:
 
 ---
 
-#### KERB-003-PRIVESC-SPN — Privileged Kerberoastable Accounts
+#### KERB-003-PRIVESC-SPN - Privileged Kerberoastable Accounts
 
 **What it detects:** Accounts with Service Principal Names (SPNs) that are **also members of privileged groups**.
 
@@ -585,8 +585,8 @@ To add a new detection:
 **Severity:** Always `CRITICAL`
 
 **Remediation:**
-1. Remove service accounts from privileged groups — service accounts should never be administrators.
-2. If admin rights are genuinely required, use a Group Managed Service Account (gMSA) — these have auto-rotating 120+ character passwords and cannot be Kerberoasted.
+1. Remove service accounts from privileged groups - service accounts should never be administrators.
+2. If admin rights are genuinely required, use a Group Managed Service Account (gMSA) - these have auto-rotating 120+ character passwords and cannot be Kerberoasted.
 3. As an interim measure, set a long random password (25+ characters) on the account.
 4. Enable `Require Kerberos AES encryption` on the account to prevent RC4-based Kerberoasting while you remediate.
 
@@ -600,32 +600,32 @@ rights are evaluated by parsing the binary `nTSecurityDescriptor` DACL and match
 the Certificate-Enrollment / AutoEnrollment extended-right GUIDs against well-known
 low-privilege principals (Authenticated Users, Domain Users/Computers, Everyone).
 
-#### ESC1-VULNERABLE-TEMPLATE — Enrollee-Supplied Subject
+#### ESC1-VULNERABLE-TEMPLATE - Enrollee-Supplied Subject
 
 **What it detects:** Templates that (1) let the enrollee supply an arbitrary subject/SAN,
 (2) issue a certificate usable for client authentication, (3) require no manager approval
 or authorized signatures, and (4) are enrollable by low-privileged users.
 
-**Why it matters:** An attacker can request a certificate as **any** user — including a
-Domain Admin — and authenticate as them, leading directly to domain takeover.
+**Why it matters:** An attacker can request a certificate as **any** user - including a
+Domain Admin - and authenticate as them, leading directly to domain takeover.
 
 **Severity:** `CRITICAL`
 
-#### ESC2-ANY-PURPOSE — Any-Purpose / No-EKU Template
+#### ESC2-ANY-PURPOSE - Any-Purpose / No-EKU Template
 
 **What it detects:** Low-priv-enrollable templates that issue "Any Purpose" (or no EKU)
 certificates with no approval. Such certificates can be used for client authentication.
 
 **Severity:** `HIGH`
 
-#### ESC3-ENROLLMENT-AGENT — Enrollment Agent Template
+#### ESC3-ENROLLMENT-AGENT - Enrollment Agent Template
 
 **What it detects:** Low-priv-enrollable templates carrying the Certificate Request Agent
 EKU, allowing the holder to enroll on behalf of other users.
 
 **Severity:** `HIGH`
 
-#### ESC4-TEMPLATE-ACL — Weak Template Permissions
+#### ESC4-TEMPLATE-ACL - Weak Template Permissions
 
 **What it detects:** Certificate templates where low-privileged principals hold
 write/owner/full-control rights. An attacker can reconfigure the template into an ESC1.
@@ -636,14 +636,14 @@ write/owner/full-control rights. An attacker can reconfigure the template into a
 
 ### Domain Hardening & Anonymous Access Detections
 
-#### ANON-001-DSHEURISTICS — Anonymous LDAP Access
+#### ANON-001-DSHEURISTICS - Anonymous LDAP Access
 
 **What it detects:** The forest `dSHeuristics` value with its 7th character set to `2`,
 which enables anonymous (unauthenticated) LDAP binds.
 
 **Severity:** `HIGH`
 
-#### ANON-002-PRE2000 — Pre-Windows 2000 Compatible Access
+#### ANON-002-PRE2000 - Pre-Windows 2000 Compatible Access
 
 **What it detects:** The "Pre-Windows 2000 Compatible Access" group containing the
 Everyone (S-1-1-0) or Anonymous Logon (S-1-5-7) well-known principals, granting broad
@@ -651,7 +651,7 @@ near-anonymous read access to the directory.
 
 **Severity:** `HIGH`
 
-#### RBCD-001-CONFIGURED — Resource-Based Constrained Delegation
+#### RBCD-001-CONFIGURED - Resource-Based Constrained Delegation
 
 **What it detects:** Accounts with `msDS-AllowedToActOnBehalfOfOtherIdentity` set. RBCD is
 a legitimate feature but a common privilege-escalation primitive, so every configured
@@ -659,11 +659,11 @@ target is surfaced for review.
 
 **Severity:** `MEDIUM`
 
-#### TRUST-003-DOWNLEVEL / TRUST-004-INACTIVE — Trust Depth
+#### TRUST-003-DOWNLEVEL / TRUST-004-INACTIVE - Trust Depth
 
 **What it detects:** Downlevel (NT4-style) trusts that predate modern trust security, and
 trusts whose trustedDomain object has not changed in over a year (likely pointing at a
-decommissioned partner domain — a forgotten authentication path).
+decommissioned partner domain - a forgotten authentication path).
 
 **Severity:** `MEDIUM`
 
@@ -671,7 +671,7 @@ decommissioned partner domain — a forgotten authentication path).
 
 ### Optional SMB SYSVOL Detection
 
-#### GPP-001-CPASSWORD — Recoverable Group Policy Preferences Passwords
+#### GPP-001-CPASSWORD - Recoverable Group Policy Preferences Passwords
 
 **What it detects:** `cpassword` attributes inside Group Policy Preferences XML files
 (Groups.xml, Services.xml, etc.) in SYSVOL. Microsoft published the static AES key
@@ -680,7 +680,7 @@ decommissioned partner domain — a forgotten authentication path).
 **How it runs:** This is the one check that reaches beyond LDAP. It is **disabled by
 default** and enabled via `[sysvol] enabled = true`. It requires the optional
 `smbprotocol` package. The scan is strictly read-only, bounded in file count and size,
-and **never writes recovered plaintext into reports** — it reports the affected account
+and **never writes recovered plaintext into reports** - it reports the affected account
 and that the credential is recoverable.
 
 **Severity:** `CRITICAL`

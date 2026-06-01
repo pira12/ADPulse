@@ -7,7 +7,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 **Core Design Principles:**
 - Zero admin rights required (standard Domain User)
 - All AD operations are strictly read-only
-- No network listeners — only outbound LDAP connections
+- No network listeners - only outbound LDAP connections
 - Local-only data storage (SQLite)
 - No email server dependency
 - Configurable exclusion lists and severity overrides per finding
@@ -77,12 +77,12 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - `LDAPCollector` establishes an NTLM-authenticated connection
 - Supports LDAP (port 389) and LDAPS (port 636, recommended)
 - Connection timeout is configurable
-- Uses `ldap3` library — pure Python, no OS dependencies
+- Uses `ldap3` library - pure Python, no OS dependencies
 
 ### Step 2: Collect AD Data (Parallel)
 - 28 specialized LDAP queries run concurrently via `concurrent.futures.ThreadPoolExecutor`
 - `_collect_ad_data()` in `main.py` dispatches all queries in parallel and merges results
-- Each query has an independent exception handler — a single failed query does not abort the scan
+- Each query has an independent exception handler - a single failed query does not abort the scan
 - All queries use standard LDAP read operations (no writes)
 - Data collected includes: users, computers, groups, delegation, password policies, SPNs, UAC flags, SID History, LAPS status, domain ACL (for DCSync detection), and more
 - Results are returned as lists of dictionaries
@@ -105,8 +105,8 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 - Expired `accepted_risk` entries are automatically demoted to `in_remediation`
 - `resolved` findings that have reappeared are automatically demoted to `in_remediation`
 - `apply_to_findings()` splits the finding list into:
-  - **Active** — findings shown in the main report (including `in_remediation` findings with a badge)
-  - **Suppressed** — `accepted_risk` and `resolved` findings, passed to the audit trail section of the HTML report
+  - **Active** - findings shown in the main report (including `in_remediation` findings with a badge)
+  - **Suppressed** - `accepted_risk` and `resolved` findings, passed to the audit trail section of the HTML report
 
 ### Step 5: Generate Reports
 - `ReportManager` generates HTML and PDF reports
@@ -129,7 +129,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 
 ## Module Reference
 
-### `main.py` — Entry Point & Orchestrator
+### `main.py` - Entry Point & Orchestrator
 
 | Function | Purpose |
 |---|---|
@@ -141,7 +141,7 @@ ADPulse is a lightweight, automated, **read-only** Active Directory security mon
 | `cmd_show_history()` | Displays recent scan history from the database |
 | `cmd_daemon()` | Runs scans continuously on a configured interval |
 
-### `modules/ldap_collector.py` — LDAP Data Collection
+### `modules/ldap_collector.py` - LDAP Data Collection
 
 All methods are **read-only**. No LDAP write operations exist in the codebase.
 
@@ -174,16 +174,16 @@ All methods are **read-only**. No LDAP write operations exist in the codebase.
 | `get_des_only_accounts()` | DES-only encryption users | UAC `0x200000` |
 | `get_expiring_accounts()` | Accounts expiring soon | `accountExpires` attribute |
 
-### `modules/baseline_engine.py` — SQLite Baseline & Delta Detection
+### `modules/baseline_engine.py` - SQLite Baseline & Delta Detection
 
 **Database Schema:**
 
 ```sql
-snapshots         — Scan metadata (run_id, status, timestamps, findings count)
-user_objects      — User account snapshots per scan run
-group_members     — Privileged group membership per scan run
-computer_objects  — Computer account snapshots per scan run
-findings_history  — All findings ever raised (with first_seen/is_new tracking)
+snapshots         - Scan metadata (run_id, status, timestamps, findings count)
+user_objects      - User account snapshots per scan run
+group_members     - Privileged group membership per scan run
+computer_objects  - Computer account snapshots per scan run
+findings_history  - All findings ever raised (with first_seen/is_new tracking)
 ```
 
 **Key Methods:**
@@ -202,18 +202,18 @@ findings_history  — All findings ever raised (with first_seen/is_new tracking)
 | `get_trend_data()` | Historical trend data for dashboard |
 | `cleanup_old_scans()` | Database retention cleanup |
 
-### `modules/detections.py` — Security Finding Detectors
+### `modules/detections.py` - Security Finding Detectors
 
 See [DETECTIONS.md](DETECTIONS.md) for a complete catalog of all 26+ detections.
 
-### `modules/report_generator.py` — HTML & PDF Reports
+### `modules/report_generator.py` - HTML & PDF Reports
 
 - Generates self-contained HTML reports (no external CSS/JS)
 - Generates branded PDF reports using ReportLab
 - Includes: risk score card, severity breakdown, finding details, remediation steps
 - ADPulse branding: Primary Blue `#0053A4`, Orange Accent `#FF8800`
 
-### `modules/notifier.py` — Output & Notifications
+### `modules/notifier.py` - Output & Notifications
 
 | Output | Format | Purpose |
 |---|---|---|
@@ -247,7 +247,7 @@ ADPulse is explicitly designed to run with **zero elevated privileges**:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Why this works:** Active Directory exposes most object attributes (user accounts, groups, computers, policies) to any authenticated domain user via LDAP read access. This is by design — AD is a directory service. ADPulse leverages this to assess security posture without requiring dangerous privileged access.
+**Why this works:** Active Directory exposes most object attributes (user accounts, groups, computers, policies) to any authenticated domain user via LDAP read access. This is by design - AD is a directory service. ADPulse leverages this to assess security posture without requiring dangerous privileged access.
 
 ---
 

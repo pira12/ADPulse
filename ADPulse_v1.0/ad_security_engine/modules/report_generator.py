@@ -3,7 +3,7 @@ report_generator.py
 --------------------
 ADPulse - Open Source AD Security Assessment Engine
 Generates professional HTML and PDF reports. Fully generic, no vendor branding.
-Output is saved to disk for manual sharing — no email dependency.
+Output is saved to disk for manual sharing - no email dependency.
 
 ADPulse Brand Colors:
   Primary Blue : #0053A4
@@ -26,7 +26,7 @@ def _esc(value) -> str:
     HTML-escape a value for safe embedding in the report. AD-derived strings
     (account names, descriptions, OS names, certificate-template names, policy
     reasons) are attacker-influenceable, so they must never be rendered as raw
-    HTML — otherwise a crafted directory object could inject script into a report
+    HTML - otherwise a crafted directory object could inject script into a report
     viewed by an administrator (stored XSS).
     """
     return _html_escape(str(value if value is not None else ""), quote=True)
@@ -122,7 +122,7 @@ class HTMLReportGenerator:
               <div class="pillar-sub">{p['findings']} finding(s)</div>
             </div>"""
 
-        # Stat cards — clickable to filter by severity
+        # Stat cards - clickable to filter by severity
         stat_cards = ""
         for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]:
             col  = SEVERITY_HEX[sev]
@@ -138,7 +138,7 @@ class HTMLReportGenerator:
         # Collect unique categories for the category filter
         categories = sorted(set(f.get("category", "") for f in findings))
 
-        # Findings — collapsible cards with data attributes for filtering
+        # Findings - collapsible cards with data attributes for filtering
         findings_html = ""
         for f in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity","INFO"), 99)):
             sev   = f.get("severity", "INFO")
@@ -208,7 +208,7 @@ class HTMLReportGenerator:
               <div class="finding-body" style="border-left:4px solid {col};background:{light};">
                 <h3 class="finding-title">{esc_title}</h3>
                 {f'<p class="policy-note"><em>&#128295; In remediation: {esc_reason}'
-                 f'{(" &mdash; expires " + _esc(f["policy_expires"])) if f.get("policy_expires") else ""}'
+                 f'{(" - expires " + _esc(f["policy_expires"])) if f.get("policy_expires") else ""}'
                  f'</em></p>' if f.get("policy_status") == "in_remediation" else ''}
                 <p class="finding-desc">{esc_desc}</p>
                 {mitre_html}
@@ -253,8 +253,8 @@ class HTMLReportGenerator:
             for f in suppressed:
                 status = f.get("policy_status", "")
                 reason = f.get("policy_reason", "")
-                exp    = f.get("policy_expires") or "—"
-                by     = f.get("policy_set_by") or "—"
+                exp    = f.get("policy_expires") or "-"
+                by     = f.get("policy_set_by") or "-"
                 sev    = f.get("severity", "INFO")
                 col    = SEVERITY_HEX.get(sev, "#666")
                 rows += f"""
@@ -275,7 +275,7 @@ class HTMLReportGenerator:
             <div style="background:white;border-radius:10px;padding:20px;
                         box-shadow:0 2px 8px rgba(0,83,164,0.07);overflow-x:auto;margin-bottom:24px;">
               <p style="font-size:13px;color:#8a99b0;margin-bottom:12px;">
-                These findings are suppressed by policy. Nothing is hidden from this report —
+                These findings are suppressed by policy. Nothing is hidden from this report -
                 all decisions are logged here for audit purposes.
               </p>
               <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -772,7 +772,7 @@ if (window.location.hash) {
   </div>
 
   <div class="pillars-box">
-    <div class="pillars-title">Risk by Category &mdash; overall score is the worst pillar</div>
+    <div class="pillars-title">Risk by Category - overall score is the worst pillar</div>
     <div class="pillars-grid">{pillar_html}</div>
   </div>
 
@@ -965,11 +965,11 @@ class PDFReportGenerator:
 
         # Severity breakdown
         sev_descs = {
-            "CRITICAL": "Immediate action required — domain compromise risk",
+            "CRITICAL": "Immediate action required - domain compromise risk",
             "HIGH":     "Urgent remediation recommended",
             "MEDIUM":   "Address within your security review cycle",
-            "LOW":      "Low risk — next maintenance window",
-            "INFO":     "Informational — no immediate action required",
+            "LOW":      "Low risk - next maintenance window",
+            "INFO":     "Informational - no immediate action required",
         }
         sev_data = [["Severity", "Count", "Guidance"]]
         for sev in ["CRITICAL","HIGH","MEDIUM","LOW","INFO"]:

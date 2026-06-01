@@ -65,7 +65,7 @@ def _pdf_available():
 def test_pdf_in_remediation_note_present():
     """PDF bytes contain the policy_reason for in_remediation findings."""
     if not _pdf_available():
-        return  # skip — reportlab not installed in this environment
+        return  # skip - reportlab not installed in this environment
 
     from modules.report_generator import PDFReportGenerator
 

@@ -5,12 +5,12 @@ Optional SMB-based SYSVOL inspection.
 
 Historically ADPulse was strictly LDAP-only. This module adds the ability to read
 the domain SYSVOL share over SMB to detect Group Policy Preferences (GPP) passwords
-— the classic "cpassword" weakness (MS14-025). The static AES key used to protect
+- the classic "cpassword" weakness (MS14-025). The static AES key used to protect
 these values was published by Microsoft, so ANY authenticated user who can read
 SYSVOL can decrypt them. Finding them is therefore a high-value, low-privilege check.
 
 Security posture (this module is deliberately conservative):
-  * Disabled by default — only runs when [sysvol] enabled = true in config.
+  * Disabled by default - only runs when [sysvol] enabled = true in config.
   * Strictly READ-ONLY. It opens files for reading and never writes to SYSVOL.
   * Bounded: caps the number of files and per-file size it will read, and only
     looks at *.xml policy files, to avoid resource exhaustion on huge shares.
@@ -18,7 +18,7 @@ Security posture (this module is deliberately conservative):
     reports the affected username and the fact that the credential is trivially
     recoverable. (Decryption is attempted only to confirm the value is valid GPP
     ciphertext; the plaintext is discarded.)
-  * Uses the same credentials already configured for LDAP — no new secrets.
+  * Uses the same credentials already configured for LDAP - no new secrets.
   * Optional dependency: requires the pure-Python 'smbprotocol' package. If it is
     not installed, the scanner degrades gracefully (logs and returns nothing).
 """
@@ -62,7 +62,7 @@ def decrypt_gpp_cpassword(cpassword: str):
         import binascii
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     except BaseException:
-        # Library missing or its native backend is broken — cannot verify.
+        # Library missing or its native backend is broken - cannot verify.
         return None
 
     try:
@@ -206,7 +206,7 @@ class SysvolScanner:
             "remediation": (
                 "1. Immediately rotate the passwords of every affected account.\n"
                 "2. Delete the offending GPP XML files from SYSVOL.\n"
-                "3. Stop using Group Policy Preferences to set passwords — use LAPS for local "
+                "3. Stop using Group Policy Preferences to set passwords - use LAPS for local "
                 "admin passwords and gMSA for service accounts.\n"
                 "4. Apply the MS14-025 update to prevent new cpassword values being created."
             ),

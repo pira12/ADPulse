@@ -157,7 +157,7 @@ class DetectionEngine:
             ad_data.get("privileged_members", {}),
         )
 
-        # New detections — Improvement 3
+        # New detections - Improvement 3
         findings += self.detect_dcsync_rights(
             ad_data.get("domain_acl", []),
             ad_data.get("domain_controllers", []),
@@ -250,7 +250,7 @@ class DetectionEngine:
                 "title": "Kerberoastable Privileged Accounts",
                 "description": (
                     f"{len(high_value)} privileged account(s) have Service Principal Names (SPNs) set. "
-                    "These accounts are vulnerable to Kerberoasting — any domain user can request a "
+                    "These accounts are vulnerable to Kerberoasting - any domain user can request a "
                     "Kerberos TGS ticket and attempt offline password cracking. Privileged accounts "
                     "with weak passwords represent an immediate domain compromise risk."
                 ),
@@ -258,7 +258,7 @@ class DetectionEngine:
                 "details": {"count": len(high_value)},
                 "remediation": (
                     "1. Remove unnecessary SPNs from privileged accounts.\n"
-                    "2. Use Group Managed Service Accounts (gMSA) for services — they have auto-rotating "
+                    "2. Use Group Managed Service Accounts (gMSA) for services - they have auto-rotating "
                     "120+ character passwords that are computationally infeasible to crack.\n"
                     "3. Ensure all service accounts have passwords of 25+ characters.\n"
                     "4. Enable AES encryption for Kerberos on these accounts."
@@ -311,7 +311,7 @@ class DetectionEngine:
                 f"{len(accounts)} account(s) have Kerberos pre-authentication disabled. "
                 "Attackers can request AS-REP messages for these accounts without any credentials, "
                 "then crack the encrypted portion offline."
-                + (f" {len(privileged)} of these are privileged accounts — this is CRITICAL." if privileged else "")
+                + (f" {len(privileged)} of these are privileged accounts - this is CRITICAL." if privileged else "")
             ),
             "affected": names,
             "details": {"count": len(accounts), "privileged_count": len(privileged)},
@@ -343,7 +343,7 @@ class DetectionEngine:
                 f"{len(accounts)} non-DC account(s) are configured with unconstrained Kerberos delegation. "
                 "When any user authenticates to these systems, their TGT is cached in memory. "
                 "An attacker who compromises one of these machines can steal those TGTs and "
-                "impersonate any user — including Domain Admins — to any service in the domain."
+                "impersonate any user - including Domain Admins - to any service in the domain."
             ),
             "affected": names,
             "details": {"count": len(accounts)},
@@ -388,7 +388,7 @@ class DetectionEngine:
     # ------------------------------------------------------------------ #
 
     def detect_password_never_expires(self, accounts: list) -> list:
-        """Accounts with Password Never Expires — chronic password hygiene risk."""
+        """Accounts with Password Never Expires - chronic password hygiene risk."""
         if not accounts:
             return []
 
@@ -409,7 +409,7 @@ class DetectionEngine:
                 f"{len(accounts)} enabled account(s) are configured with 'Password Never Expires'. "
                 "These accounts may have passwords that have not changed for years, "
                 "significantly increasing the risk of credential compromise."
-                + (f" {len(privileged)} privileged account(s) are included — this requires immediate attention." if privileged else "")
+                + (f" {len(privileged)} privileged account(s) are included - this requires immediate attention." if privileged else "")
             ),
             "affected": names,
             "details": {"count": len(accounts), "privileged_count": len(privileged)},
@@ -424,7 +424,7 @@ class DetectionEngine:
     def detect_stale_accounts(self, users: list) -> list:
         """
         User accounts that haven't logged in for the configured threshold.
-        Stale accounts are prime targets for attackers — they often go unnoticed.
+        Stale accounts are prime targets for attackers - they often go unnoticed.
         """
         stale = []
         very_stale = []  # > 2x threshold
@@ -498,7 +498,7 @@ class DetectionEngine:
     def detect_admincount_orphans(self, admincount_users: list, privileged_members: dict) -> list:
         """
         Accounts with adminCount=1 that are NOT members of any privileged group.
-        These are 'orphaned' AdminSDHolder accounts — they still have locked-down ACLs
+        These are 'orphaned' AdminSDHolder accounts - they still have locked-down ACLs
         but AdminSDHolder no longer manages them, so permissions may have drifted.
         """
         # Build set of all current privileged members (extract CN/sam from DNs)
@@ -747,7 +747,7 @@ class DetectionEngine:
 
     def detect_password_not_required(self, accounts: list) -> list:
         """
-        Accounts with PASSWD_NOTREQD flag — can have empty passwords.
+        Accounts with PASSWD_NOTREQD flag - can have empty passwords.
         This is a critical misconfiguration often left from legacy migrations.
         """
         if not accounts:
@@ -766,7 +766,7 @@ class DetectionEngine:
                 f"{len(accounts)} enabled account(s) have the PASSWD_NOTREQD flag set. "
                 "These accounts are permitted to have an empty password, meaning they can "
                 "be accessed without any authentication if the password is actually blank."
-                + (f" {len(privileged)} privileged account(s) are affected — this is CRITICAL." if privileged else "")
+                + (f" {len(privileged)} privileged account(s) are affected - this is CRITICAL." if privileged else "")
             ),
             "affected": names,
             "details": {"count": len(accounts), "privileged_count": len(privileged)},
@@ -774,13 +774,13 @@ class DetectionEngine:
                 "1. Remove the PASSWD_NOTREQD flag from all accounts immediately.\n"
                 "2. Force a password reset on all affected accounts.\n"
                 "3. Audit whether any of these accounts have blank passwords.\n"
-                "4. Investigate the origin — often set during bulk imports or migrations."
+                "4. Investigate the origin - often set during bulk imports or migrations."
             ),
         }]
 
     def detect_reversible_encryption(self, accounts: list) -> list:
         """
-        Accounts with reversible encryption — passwords stored as near-plaintext.
+        Accounts with reversible encryption - passwords stored as near-plaintext.
         """
         if not accounts:
             return []
@@ -794,7 +794,7 @@ class DetectionEngine:
             "title": "Accounts with Reversible Encryption Enabled",
             "description": (
                 f"{len(accounts)} account(s) store their passwords using reversible encryption. "
-                "This is effectively plaintext storage — anyone with access to the AD database "
+                "This is effectively plaintext storage - anyone with access to the AD database "
                 "(ntds.dit) can recover these passwords without cracking. This is only required "
                 "for CHAP/Digest authentication, which is extremely rare in modern environments."
             ),
@@ -810,7 +810,7 @@ class DetectionEngine:
 
     def detect_sid_history(self, accounts: list) -> list:
         """
-        Accounts with SID History — can be abused for privilege escalation.
+        Accounts with SID History - can be abused for privilege escalation.
         """
         if not accounts:
             return []
@@ -827,7 +827,7 @@ class DetectionEngine:
                 f"{len(accounts)} account(s) have the sIDHistory attribute populated. "
                 "SID History is used during domain migrations to preserve access to resources "
                 "in the source domain. After migration, leftover SID History entries can be "
-                "abused for privilege escalation — an attacker can inject SIDs of privileged "
+                "abused for privilege escalation - an attacker can inject SIDs of privileged "
                 "groups (e.g., Domain Admins) into this attribute to gain unauthorized access."
                 + (f" {len(privileged)} are privileged accounts." if privileged else "")
             ),
@@ -844,7 +844,7 @@ class DetectionEngine:
     def detect_description_passwords(self, accounts: list) -> list:
         """
         Accounts with potential passwords stored in the description field.
-        Description is readable by ALL domain users — a common data leak.
+        Description is readable by ALL domain users - a common data leak.
         """
         if not accounts:
             return []
@@ -914,7 +914,7 @@ class DetectionEngine:
             "details": {"count": len(unprotected), "total_privileged": len(all_privileged_dns)},
             "remediation": (
                 "1. Add all privileged user accounts to the 'Protected Users' group.\n"
-                "2. Test thoroughly — some legacy apps may break with Protected Users.\n"
+                "2. Test thoroughly - some legacy apps may break with Protected Users.\n"
                 "3. Note: Service accounts should NOT be in Protected Users (delegation breaks).\n"
                 "4. Ensure domain functional level is Windows Server 2012 R2 or higher."
             ),
@@ -922,7 +922,7 @@ class DetectionEngine:
 
     def detect_machine_account_quota(self, domain_info: dict) -> list:
         """
-        Check ms-DS-MachineAccountQuota — if >0, any user can join machines to the domain.
+        Check ms-DS-MachineAccountQuota - if >0, any user can join machines to the domain.
         """
         if not domain_info:
             return []
@@ -962,7 +962,7 @@ class DetectionEngine:
 
     def detect_computers_without_laps(self, computers_without_laps: list, all_computers: list) -> list:
         """
-        Computers without LAPS deployed — local admin passwords may be shared/static.
+        Computers without LAPS deployed - local admin passwords may be shared/static.
         """
         if not computers_without_laps:
             return []
@@ -1037,7 +1037,7 @@ class DetectionEngine:
                 "The krbtgt account is used to encrypt all Kerberos tickets (TGTs) in the domain. "
                 "If an attacker obtains the krbtgt hash (via DCSync or ntds.dit extraction), "
                 "they can forge Golden Tickets granting Domain Admin access. The only mitigation "
-                "is rotating the krbtgt password — which invalidates existing Golden Tickets."
+                "is rotating the krbtgt password - which invalidates existing Golden Tickets."
             ),
             "affected": [f"krbtgt (password age: {days} days)"],
             "details": {"password_age_days": days, "recommended_max_days": 180},
@@ -1087,11 +1087,11 @@ class DetectionEngine:
                 label += " [SID Filtering OFF]"
             trust_names.append(label)
 
-            # Downlevel (NT4) trust — legacy and inherently weaker
+            # Downlevel (NT4) trust - legacy and inherently weaker
             if trust_type == 1:
                 downlevel.append(f"{partner} ({dir_label})")
 
-            # Inactive trust — the trusted-domain object has not changed in a long
+            # Inactive trust - the trusted-domain object has not changed in a long
             # time, suggesting the partner domain may be gone (a stale attack surface).
             changed_days = _days_since(_to_datetime(t.get("whenChanged")))
             if changed_days is not None and changed_days > 365:
@@ -1187,7 +1187,7 @@ class DetectionEngine:
 
     def detect_duplicate_spns(self, kerberoastable: list) -> list:
         """
-        Detect duplicate SPNs across accounts — causes Kerberos auth failures
+        Detect duplicate SPNs across accounts - causes Kerberos auth failures
         and can be exploited for SPN hijacking.
         """
         spn_map = {}
@@ -1219,7 +1219,7 @@ class DetectionEngine:
             "description": (
                 f"{len(duplicates)} SPN(s) are registered on multiple accounts. "
                 "Duplicate SPNs cause Kerberos authentication failures and can be "
-                "exploited for SPN hijacking — an attacker could register a duplicate "
+                "exploited for SPN hijacking - an attacker could register a duplicate "
                 "SPN on an account they control to intercept service tickets."
             ),
             "affected": affected[:20],
@@ -1233,7 +1233,7 @@ class DetectionEngine:
         }]
 
     def detect_des_only_encryption(self, accounts: list) -> list:
-        """DES-only Kerberos encryption — trivially breakable."""
+        """DES-only Kerberos encryption - trivially breakable."""
         if not accounts:
             return []
 
@@ -1295,7 +1295,7 @@ class DetectionEngine:
         }]
 
     def detect_expiring_accounts(self, accounts: list) -> list:
-        """Accounts expiring soon — operational awareness."""
+        """Accounts expiring soon - operational awareness."""
         if not accounts:
             return []
 
@@ -1367,7 +1367,7 @@ class DetectionEngine:
         uncovered = []
         for group_name, members in privileged_members.items():
             # Check if the group itself or its members are FGPP targets
-            # We'd need the group DN — approximate by checking group_name in targets
+            # We'd need the group DN - approximate by checking group_name in targets
             covered = False
             for target in fgpp_targets:
                 if group_name.lower() in target:
@@ -1495,7 +1495,7 @@ class DetectionEngine:
         }]
 
     # ------------------------------------------------------------------ #
-    #  New Detections — Improvement 3                                      #
+    #  New Detections - Improvement 3                                      #
     # ------------------------------------------------------------------ #
 
     def detect_dcsync_rights(self, domain_acl: list, domain_controllers: list) -> list:
@@ -1523,7 +1523,7 @@ class DetectionEngine:
             "description": (
                 "The following non-DC accounts have DS-Replication-Get-Changes-All "
                 "permission on the domain root. This grants the ability to perform a "
-                "DCSync attack — extracting all password hashes from AD without "
+                "DCSync attack - extracting all password hashes from AD without "
                 "logging on to a Domain Controller."
             ),
             "affected":     flagged,
@@ -1566,7 +1566,7 @@ class DetectionEngine:
                 continue  # disabled accounts are not a login risk
 
             days = _days_since(_to_datetime(u.get("lastLogonTimestamp")))
-            # days is None means never logged on — treat as dormant (no logon = no telemetry)
+            # days is None means never logged on - treat as dormant (no logon = no telemetry)
             if days is None or days > self.dormant_admin_days:
                 name = _account_name(u)
                 dormant.append(name)
@@ -1583,7 +1583,7 @@ class DetectionEngine:
             "description": (
                 f"{len(dormant)} enabled account(s) in privileged groups have not "
                 f"authenticated in more than {self.dormant_admin_days} days. "
-                "Unused admin accounts are high-value targets — if credentials are "
+                "Unused admin accounts are high-value targets - if credentials are "
                 "compromised the account can be used without triggering normal activity alerts."
             ),
             "affected":     dormant,
@@ -1602,7 +1602,7 @@ class DetectionEngine:
         """
         PRIV-002-NESTED-PRIV: Accounts reaching privileged groups through
         2+ levels of group nesting (e.g., jsmith → HelpDesk → Domain Admins).
-        Only direct members are tracked in privileged_members — indirect paths are missed.
+        Only direct members are tracked in privileged_members - indirect paths are missed.
         Uses depth-limited recursion (max 10) to handle multi-level chains and
         guard against circular group memberships.
         """
@@ -1646,7 +1646,7 @@ class DetectionEngine:
             result = set()
             for member_dn in dn_to_members.get(group_dn, []):
                 if member_dn in dn_to_members:
-                    # member is a group — recurse
+                    # member is a group - recurse
                     result |= _all_members_recursive(member_dn, visited, depth + 1)
                 else:
                     # member is a user account
@@ -1661,7 +1661,7 @@ class DetectionEngine:
             # Find all user accounts reachable through nested groups only
             for member_dn in list(direct_members):
                 if member_dn in dn_to_members:
-                    # This direct member is a group — find its user members recursively
+                    # This direct member is a group - find its user members recursively
                     sub_users = _all_members_recursive(member_dn, frozenset({priv_dn}), 0)
                     intermediate_sam = dn_to_sam.get(member_dn, member_dn)
                     for user_dn in sub_users:
@@ -1700,7 +1700,7 @@ class DetectionEngine:
             "description": (
                 f"{len(nested_findings)} account(s) reach privileged groups through 2 or more "
                 "levels of group nesting. These accounts have effective privileged access but "
-                "do not appear in direct membership checks — they are easy to overlook during "
+                "do not appear in direct membership checks - they are easy to overlook during "
                 "access reviews."
             ),
             "affected":     nested_findings[:50],
@@ -1719,7 +1719,7 @@ class DetectionEngine:
         """
         KERB-003-PRIVESC-SPN: Kerberoastable accounts that are also members
         of privileged groups. An attacker who cracks the service account hash
-        gets immediate privileged access — no lateral movement required.
+        gets immediate privileged access - no lateral movement required.
         """
         if not kerberoastable or not privileged_members:
             return []
@@ -1748,15 +1748,15 @@ class DetectionEngine:
                 f"{len(flagged)} account(s) with Service Principal Names (SPNs) are also members "
                 "of privileged groups. Any domain user can request a Kerberos service ticket for "
                 "these accounts and attempt offline password cracking. A cracked hash yields "
-                "immediate privileged access — no further exploitation required."
+                "immediate privileged access - no further exploitation required."
             ),
             "affected":     flagged,
             "details":      {"count": len(flagged)},
             "remediation": (
-                "1. Remove service accounts from privileged groups — service accounts "
+                "1. Remove service accounts from privileged groups - service accounts "
                 "   should never be administrators.\n"
                 "2. If admin rights are genuinely required, use a Group Managed Service Account "
-                "   (gMSA) — these have auto-rotating 120+ character passwords.\n"
+                "   (gMSA) - these have auto-rotating 120+ character passwords.\n"
                 "3. As an interim measure, set a long random password (25+ chars) on the account.\n"
                 "4. Enable 'Require Kerberos AES encryption' on the account to prevent "
                 "   RC4-based Kerberoasting while you remediate."
@@ -1772,18 +1772,18 @@ class DetectionEngine:
         Detect exploitable AD Certificate Services certificate templates
         (the "ESC" family).
 
-        ESC1 — low-priv users can enroll in a client-auth template AND supply an
+        ESC1 - low-priv users can enroll in a client-auth template AND supply an
                arbitrary subject (SAN), letting them request a certificate that
                authenticates as any user (including Domain Admins).
-        ESC2 — low-priv users can enroll in an "Any Purpose" (or no-EKU) template.
-        ESC3 — low-priv users can enroll in a Certificate Request Agent template,
+        ESC2 - low-priv users can enroll in an "Any Purpose" (or no-EKU) template.
+        ESC3 - low-priv users can enroll in a Certificate Request Agent template,
                enabling them to enroll on behalf of other users.
-        ESC4 — low-priv users hold dangerous write rights over a template object
+        ESC4 - low-priv users hold dangerous write rights over a template object
                and can reconfigure it into an ESC1.
         """
         findings = []
         if not cert_templates:
-            # No ADCS templates found (ADCS likely not deployed) — nothing to report.
+            # No ADCS templates found (ADCS likely not deployed) - nothing to report.
             return findings
 
         esc1, esc2, esc3, esc4 = [], [], [], []
@@ -1812,8 +1812,8 @@ class DetectionEngine:
                 "description": (
                     f"{len(esc1)} certificate template(s) allow low-privileged users to enroll, "
                     "supply an arbitrary subject/SAN, and obtain a certificate usable for "
-                    "authentication. An attacker can request a certificate as any user — "
-                    "including a Domain Admin — and use it to take over the domain (ESC1)."
+                    "authentication. An attacker can request a certificate as any user - "
+                    "including a Domain Admin - and use it to take over the domain (ESC1)."
                 ),
                 "affected": esc1,
                 "details": {"count": len(esc1), "esc": "ESC1"},
@@ -1942,7 +1942,7 @@ class DetectionEngine:
         """
         RBCD-001: accounts configured as Resource-Based Constrained Delegation
         targets. RBCD is a legitimate feature but a frequent privilege-escalation
-        primitive — every configured target should be reviewed.
+        primitive - every configured target should be reviewed.
         """
         if not rbcd_accounts:
             return []

@@ -3,9 +3,9 @@ ldap_collector.py
 -----------------
 Handles all LDAP queries against Active Directory.
 Supports two authentication modes:
-  1. Integrated Windows auth (default) — uses the logged-in user's Kerberos token.
+  1. Integrated Windows auth (default) - uses the logged-in user's Kerberos token.
      Just run the tool on a domain-joined Windows VM with read access to AD.
-  2. Explicit credentials — provide username/password in config.ini for remote use.
+  2. Explicit credentials - provide username/password in config.ini for remote use.
 
 All data is read-only. No writes are performed.
 """
@@ -314,7 +314,7 @@ class LDAPCollector:
             )
 
             if self.use_integrated_auth:
-                # Integrated Windows authentication — uses the logged-in user's
+                # Integrated Windows authentication - uses the logged-in user's
                 # Kerberos ticket. Works on domain-joined Windows machines.
                 self.conn = Connection(
                     server,
@@ -659,7 +659,7 @@ class LDAPCollector:
     def get_password_not_required_accounts(self) -> list:
         """
         Accounts with PASSWD_NOTREQD flag (UAC 0x20).
-        These accounts can have an empty password — a critical misconfiguration.
+        These accounts can have an empty password - a critical misconfiguration.
         """
         attrs = [
             "sAMAccountName", "displayName", "userAccountControl",
@@ -677,7 +677,7 @@ class LDAPCollector:
     def get_reversible_encryption_accounts(self) -> list:
         """
         Accounts storing passwords with reversible encryption (UAC 0x80).
-        Effectively plaintext password storage — a severe weakness.
+        Effectively plaintext password storage - a severe weakness.
         """
         attrs = [
             "sAMAccountName", "displayName", "userAccountControl",
@@ -728,7 +728,7 @@ class LDAPCollector:
     def get_users_with_description_passwords(self) -> list:
         """
         Find user accounts whose description field contains password-like strings.
-        A surprisingly common bad practice — readable by any domain user.
+        A surprisingly common bad practice - readable by any domain user.
         """
         attrs = [
             "sAMAccountName", "displayName", "description",
@@ -748,7 +748,7 @@ class LDAPCollector:
     def get_computers_without_laps(self) -> list:
         """
         Find computer accounts without LAPS (Local Administrator Password Solution).
-        Checks for the ms-Mcs-AdmPwdExpirationTime attribute — if absent, LAPS
+        Checks for the ms-Mcs-AdmPwdExpirationTime attribute - if absent, LAPS
         is likely not deployed on that machine. Readable by standard users.
         """
         attrs = [
@@ -787,7 +787,7 @@ class LDAPCollector:
 
     def get_krbtgt_account(self) -> Optional[dict]:
         """
-        Get the krbtgt account — the Kerberos ticket-granting service account.
+        Get the krbtgt account - the Kerberos ticket-granting service account.
         Its password age is a critical security indicator.
         """
         attrs = [
@@ -979,7 +979,7 @@ class LDAPCollector:
         Build an LDAP control requesting only OWNER+GROUP+DACL of the security
         descriptor (sdflags=0x07). This avoids needing SeSecurityPrivilege to read
         the SACL, so the query succeeds for ordinary domain users. Returns None if
-        the helper is unavailable (older ldap3) — the search still works without it.
+        the helper is unavailable (older ldap3) - the search still works without it.
         """
         try:
             from ldap3.protocol.microsoft import security_descriptor_control
@@ -1125,7 +1125,7 @@ class LDAPCollector:
     def get_rbcd_accounts(self) -> list:
         """
         Accounts configured as targets of Resource-Based Constrained Delegation
-        (msDS-AllowedToActOnBehalfOfOtherIdentity set). These must be audited —
+        (msDS-AllowedToActOnBehalfOfOtherIdentity set). These must be audited -
         a writeable RBCD attribute is a common privilege-escalation primitive.
         """
         attrs = ["sAMAccountName", "distinguishedName", "userAccountControl"]

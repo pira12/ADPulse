@@ -127,7 +127,7 @@ class PolicyManager:
         for fid in cleared:
             logger.warning(
                 f"Finding {fid} was marked resolved but has reappeared. "
-                "Policy entry cleared — please re-triage."
+                "Policy entry cleared - please re-triage."
             )
             del self._policy[fid]
         if cleared:
@@ -150,7 +150,7 @@ class PolicyManager:
             fid = f["finding_id"]
             entry = self._policy.get(fid)
             if entry:
-                f = dict(f)  # copy — do not mutate the original
+                f = dict(f)  # copy - do not mutate the original
                 f["policy_status"] = entry["status"]
                 f["policy_reason"] = entry.get("reason", "")
                 f["policy_expires"] = entry.get("expires")

@@ -2,7 +2,7 @@
 # build_offline_package.sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Builds a fully self-contained ADPulse package for offline Windows deployment.
-# Run this on your Linux machine — it downloads the Windows Python embeddable
+# Run this on your Linux machine - it downloads the Windows Python embeddable
 # and Windows-compatible dependency wheels, pre-installs everything, and
 # assembles a folder you can copy directly to the air-gapped VM via RDP.
 #
@@ -96,7 +96,7 @@ if [ -n "$PTH_FILE" ]; then
     grep -q "Lib.site-packages" "$PTH_FILE" || printf 'Lib\\site-packages\n' >> "$PTH_FILE"
     echo -e "  Patched $(basename "$PTH_FILE") to enable site-packages"
 else
-    echo -e "${YELLOW}  WARNING: Could not find ._pth file — site-packages may not load${NC}"
+    echo -e "${YELLOW}  WARNING: Could not find ._pth file - site-packages may not load${NC}"
 fi
 
 echo -e "${GREEN}[OK] Python $PYTHON_VERSION extracted and configured.${NC}"
@@ -145,7 +145,7 @@ echo -e "${GREEN}[OK] $WHL_COUNT wheel file(s) downloaded.${NC}"
 # ── Step 3: Pre-install wheels into portable Python's site-packages ───────────
 echo ""
 echo -e "${YELLOW}[3/4] Pre-installing dependencies into portable Python...${NC}"
-echo "  (Extracts wheels directly into site-packages — no pip needed on the VM)"
+echo "  (Extracts wheels directly into site-packages - no pip needed on the VM)"
 
 for wheel in "$WHEEL_DIR"/*.whl; do
     whl_name=$(basename "$wheel")
@@ -303,7 +303,7 @@ echo -e "${YELLOW}  On the Windows VM (no install steps needed):${NC}"
 echo "    1. Double-click Run-ADPulse.bat"
 echo "       → On first run it creates config.ini and opens it in Notepad"
 echo "    2. Fill in your domain controller (server = dc01.corp.local, domain = corp.local)"
-echo "    3. Double-click Run-ADPulse.bat again — it scans and saves reports to output\\"
+echo "    3. Double-click Run-ADPulse.bat again - it scans and saves reports to output\\"
 echo ""
 echo -e "${YELLOW}  Optional - set up automated recurring scans:${NC}"
 echo "    Double-click Install-ScheduledTask.bat (runs as your Windows user, no admin needed)"

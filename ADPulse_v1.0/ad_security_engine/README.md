@@ -1,8 +1,8 @@
 # 🛡️ AD Security Continuous Assessment Engine
 
-A **lightweight, automated** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift — just run it on a domain-joined Windows VM with read access to AD.
+A **lightweight, automated** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift - just run it on a domain-joined Windows VM with read access to AD.
 
-It runs **read-only by default** (LDAP only, standard domain-user privileges). An optional, opt-in SMB module can additionally inspect SYSVOL for Group Policy Preferences passwords — still read-only, but reaching beyond LDAP.
+It runs **read-only by default** (LDAP only, standard domain-user privileges). An optional, opt-in SMB module can additionally inspect SYSVOL for Group Policy Preferences passwords - still read-only, but reaching beyond LDAP.
 
 ---
 
@@ -10,53 +10,53 @@ It runs **read-only by default** (LDAP only, standard domain-user privileges). A
 
 | Feature | Details |
 |---------|---------|
-| **No service account** | Uses integrated Windows auth — just run on a domain-joined VM with AD read access |
-| **Risk model & maturity grade** | PingCastle-style 4-pillar scoring (Privileged Accounts, Trusts, Stale Objects, Anomalies) where the overall score is the *worst* pillar, plus a 1–5 maturity level |
+| **No service account** | Uses integrated Windows auth - just run on a domain-joined VM with AD read access |
+| **Risk model & maturity grade** | PingCastle-style 4-pillar scoring (Privileged Accounts, Trusts, Stale Objects, Anomalies) where the overall score is the *worst* pillar, plus a 1-5 maturity level |
 | **MITRE ATT&CK mapping** | Every finding is tagged with the ATT&CK technique an attacker would use |
-| **ADCS / PKI coverage** | Detects vulnerable certificate templates (ESC1–ESC4) over LDAP |
+| **ADCS / PKI coverage** | Detects vulnerable certificate templates (ESC1-ESC4) over LDAP |
 | **Fully automated** | Runs as a Windows Scheduled Task or daemon, zero manual effort |
 | **Baseline & delta** | Detects *changes* between scans, not just point-in-time issues |
 | **Finding policy lifecycle** | Mark findings as `accepted_risk`, `in_remediation`, or `resolved` via `--policy` CLI |
-| **Parallel LDAP scan** | All AD queries run concurrently — faster scans on large environments |
+| **Parallel LDAP scan** | All AD queries run concurrently - faster scans on large environments |
 | **Professional reports** | Auto-generates branded PDF and interactive HTML reports with policy badges, MITRE chips and a category-risk breakdown |
 | **Email alerting** | Sends severity-filtered alerts with the PDF attached |
-| **SQLite storage** | No external database — single file, zero infrastructure |
-| **Cross-platform** | Python — runs on Windows, Linux (for hybrid environments) |
+| **SQLite storage** | No external database - single file, zero infrastructure |
+| **Cross-platform** | Python - runs on Windows, Linux (for hybrid environments) |
 
 ---
 
 ## 🔍 What It Detects
 
 ### Kerberos Attack Paths
-- **Kerberoastable accounts** — users/services with SPNs (offline password cracking risk)
-- **AS-REP Roastable accounts** — pre-authentication disabled (no credential needed to attack)
-- **Unconstrained delegation** — systems that cache TGTs (full domain takeover risk if compromised)
-- **Constrained delegation** — audited and flagged for review
+- **Kerberoastable accounts** - users/services with SPNs (offline password cracking risk)
+- **AS-REP Roastable accounts** - pre-authentication disabled (no credential needed to attack)
+- **Unconstrained delegation** - systems that cache TGTs (full domain takeover risk if compromised)
+- **Constrained delegation** - audited and flagged for review
 
 ### Privileged Access
-- **DCSync rights** — non-DC accounts with DS-Replication-Get-Changes-All (can dump all hashes)
-- **Dormant privileged accounts** — admin accounts inactive for 90+ days or never logged on
-- **Nested group privilege** — accounts reaching Domain Admins through intermediate group chains
-- **Privileged Kerberoastable accounts** — service accounts in privileged groups (crack hash = instant admin)
-- **Privileged group changes** — additions/removals from Domain Admins, Enterprise Admins, etc.
-- **AdminCount=1 orphans** — former admin accounts with leftover elevated ACLs
+- **DCSync rights** - non-DC accounts with DS-Replication-Get-Changes-All (can dump all hashes)
+- **Dormant privileged accounts** - admin accounts inactive for 90+ days or never logged on
+- **Nested group privilege** - accounts reaching Domain Admins through intermediate group chains
+- **Privileged Kerberoastable accounts** - service accounts in privileged groups (crack hash = instant admin)
+- **Privileged group changes** - additions/removals from Domain Admins, Enterprise Admins, etc.
+- **AdminCount=1 orphans** - former admin accounts with leftover elevated ACLs
 - New accounts appearing since last scan
 
 ### Password Hygiene
 - **Password Never Expires** accounts (especially dangerous if privileged)
-- **Stale accounts** — enabled users with no recent logon activity
-- **Password policy weaknesses** — short minimum length, no lockout, low history
+- **Stale accounts** - enabled users with no recent logon activity
+- **Password policy weaknesses** - short minimum length, no lockout, low history
 
 ### Infrastructure
-- **Stale computer accounts** — decommissioned machines still in AD
-- **End-of-life operating systems** — Windows XP, Server 2003/2008, Windows 7, etc.
+- **Stale computer accounts** - decommissioned machines still in AD
+- **End-of-life operating systems** - Windows XP, Server 2003/2008, Windows 7, etc.
 - Unconstrained delegation on non-DC machines
 
 ### Certificate Services (ADCS / PKI)
-- **ESC1** — enrollee-supplied subject on a client-auth template enrollable by low-priv users (domain takeover)
-- **ESC2** — Any-Purpose / no-EKU template enrollable by low-priv users
-- **ESC3** — Enrollment Agent template enrollable by low-priv users
-- **ESC4** — weak certificate-template permissions (low-priv write/owner → reconfigure into ESC1)
+- **ESC1** - enrollee-supplied subject on a client-auth template enrollable by low-priv users (domain takeover)
+- **ESC2** - Any-Purpose / no-EKU template enrollable by low-priv users
+- **ESC3** - Enrollment Agent template enrollable by low-priv users
+- **ESC4** - weak certificate-template permissions (low-priv write/owner, can be reconfigured into ESC1)
 
 ### Domain Hardening & Trusts
 - **Anonymous LDAP access** via `dSHeuristics`
@@ -65,7 +65,7 @@ It runs **read-only by default** (LDAP only, standard domain-user privileges). A
 - **Downlevel (NT4) trusts** and **inactive trusts** (stale partner domains)
 
 ### Group Policy Preferences (optional SMB SYSVOL scan)
-- **GPP `cpassword`** credentials recoverable from SYSVOL (MS14-025) — off by default, opt-in via `[sysvol]`
+- **GPP `cpassword`** credentials recoverable from SYSVOL (MS14-025) - off by default, opt-in via `[sysvol]`
 
 ---
 
@@ -84,7 +84,7 @@ pip install -r requirements.txt
 ```bash
 cp config.ini.example config.ini
 ```
-Edit `config.ini` — you only need to fill in **server** and **domain**. Leave username/password blank to use integrated Windows auth.
+Edit `config.ini` - you only need to fill in **server** and **domain**. Leave username/password blank to use integrated Windows auth.
 
 ### 4. Where to Find Your Config Values
 
@@ -92,10 +92,10 @@ Open a **Command Prompt** on your Windows VM and run these commands:
 
 | Setting | How to find it | Example value |
 |---------|---------------|---------------|
-| **server** | Run `nltest /dsgetdc:` — look for the **DC** line. Or run `echo %LOGONSERVER%` (returns `\\DC01`, so your server is `DC01.yourdomain.local`). You can also open **Active Directory Users and Computers** — the DC is shown in the tree root. | `dc01.corp.local` |
-| **domain** | Run `echo %USERDNSDOMAIN%` — this prints your domain name directly. Or check **System** > **Full computer name** (e.g. `PC01.corp.local` means domain is `corp.local`). | `corp.local` |
-| **username** | Leave blank — integrated auth uses your Windows login automatically. | *(empty)* |
-| **password** | Leave blank — same reason. | *(empty)* |
+| **server** | Run `nltest /dsgetdc:` - look for the **DC** line. Or run `echo %LOGONSERVER%` (returns `\\DC01`, so your server is `DC01.yourdomain.local`). You can also open **Active Directory Users and Computers** - the DC is shown in the tree root. | `dc01.corp.local` |
+| **domain** | Run `echo %USERDNSDOMAIN%` - this prints your domain name directly. Or check **System** > **Full computer name** (e.g. `PC01.corp.local` means domain is `corp.local`). | `corp.local` |
+| **username** | Leave blank - integrated auth uses your Windows login automatically. | *(empty)* |
+| **password** | Leave blank - same reason. | *(empty)* |
 | **port** | Use `389` (default). Only change to `636` if your organization requires encrypted LDAP. | `389` |
 | **use_ssl** | Set to `false` for port 389, `true` for port 636. | `false` |
 
@@ -129,30 +129,38 @@ scan_interval_hours = 6          # For daemon mode
 stale_account_days  = 60         # Flag accounts inactive this long
 privileged_groups   = Domain Admins,Enterprise Admins,Schema Admins,...
 
-[alerting]
-email_enabled       = true
-smtp_server         = mail.company.local
-alert_recipients    = security-team@company.local
-min_alert_severity  = HIGH       # Send email for HIGH and CRITICAL only
+[output]
+min_summary_severity = MEDIUM    # Minimum severity shown in console + summary.txt
+email_enabled        = true
+smtp_server          = mail.company.local
+smtp_port            = 587
+email_from           = adpulse@company.local
+email_to             = security-team@company.local
+email_min_severity   = HIGH      # Send email for HIGH and CRITICAL only
+webhook_url          =           # Optional Slack/Teams/HTTP webhook
+syslog_server        =           # Optional syslog server (UDP)
 
 [reporting]
 company_name = ACME Corp
 generate_pdf = true
 generate_html = true
 output_dir   = ./output
+
+[sysvol]
+enabled = false                  # Opt-in SMB scan of SYSVOL for GPP cpassword
 ```
 
 ---
 
 ## 🖥️ Windows Deployment (Recommended)
 
-### Step 1 — Configure
+### Step 1 - Configure
 ```bash
 cp config.ini.example config.ini
 ```
 Fill in **server** and **domain** (see the table above). Leave username/password blank.
 
-### Step 2 — Install as Scheduled Task
+### Step 2 - Install as Scheduled Task
 ```powershell
 .\install\install_scheduled_task.ps1 -InstallDir "C:\ADSecurityEngine" -IntervalHours 6
 ```
@@ -165,28 +173,28 @@ The task runs as your current Windows user with integrated AD authentication. No
 
 For VMs with **no internet access and no Python installed** (common for read-only AD-joined VMs):
 
-### Step 1 — Build the portable package
+### Step 1 - Build the portable package
 
-**Option A — From Linux (recommended if you develop on Linux):**
+**Option A - From Linux (recommended if you develop on Linux):**
 ```bash
 cd ADPulse_v1.0/ad_security_engine/install
 chmod +x build_offline_package.sh
 ./build_offline_package.sh
 ```
 
-**Option B — From a Windows machine with internet:**
+**Option B - From a Windows machine with internet:**
 ```powershell
 cd ADPulse_v1.0\ad_security_engine\install
 .\prepare_offline_package.ps1
 ```
 
 Both produce an `ADPulse_Portable` folder containing:
-- **Portable Python** (Windows embeddable — no installer needed)
+- **Portable Python** (Windows embeddable - no installer needed)
 - **All dependency wheels** pre-installed into the Python environment
 - **ADPulse source code**
-- **`Run-ADPulse.bat`** — double-click to scan
+- **`Run-ADPulse.bat`** - double-click to scan
 
-### Step 2 — Transfer to the air-gapped VM via RDP
+### Step 2 - Transfer to the air-gapped VM via RDP
 
 1. In your RDP client, enable drive redirection:
    **Local Resources → More → Drives → check your local drive**
@@ -194,7 +202,7 @@ Both produce an `ADPulse_Portable` folder containing:
 3. Inside the RDP session, open File Explorer and go to `\\tsclient\`
 4. Copy the `ADPulse_Portable` folder to `C:\` on the VM
 
-### Step 3 — Run on the VM
+### Step 3 - Run on the VM
 
 ```
 Double-click Run-ADPulse.bat
@@ -247,15 +255,19 @@ ad_security_engine/
 ├── config.ini.example              # Configuration template
 ├── requirements.txt
 ├── modules/
-│   ├── ldap_collector.py           # 28 read-only LDAP queries (parallel via ThreadPoolExecutor)
+│   ├── ldap_collector.py           # Read-only LDAP queries (parallel via ThreadPoolExecutor)
 │   ├── baseline_engine.py          # SQLite baseline & delta detection
-│   ├── detections.py               # 30+ security detection methods
+│   ├── detections.py               # 40+ security detection methods (incl. ADCS ESC1-4)
+│   ├── scoring.py                  # 4-pillar risk model + 1-5 maturity grade
+│   ├── mitre.py                    # MITRE ATT&CK technique tagging
+│   ├── sysvol_scanner.py           # Optional SMB SYSVOL scan (GPP cpassword)
 │   ├── policy_manager.py           # Finding lifecycle (accepted_risk/in_remediation/resolved)
 │   ├── report_generator.py         # HTML (policy badges + audit trail), PDF, CSV, trend dashboard
 │   └── notifier.py                 # Console, text, JSON, Event Log, webhook, syslog, email
 ├── tests/
 │   ├── fixtures.py                 # Shared mock AD data for all tests
-│   ├── test_detections_new.py      # Tests for new detection methods
+│   ├── test_detections_new.py      # Tests for detection methods
+│   ├── test_new_capabilities.py    # Tests for scoring, MITRE, ADCS, SYSVOL, hardening
 │   ├── test_parallel_scan.py       # Tests for parallel LDAP collection
 │   ├── test_policy_manager.py      # Tests for PolicyManager
 │   ├── test_report_policy.py       # Tests for policy badges in HTML
@@ -273,24 +285,40 @@ ad_security_engine/
 
 ## 🔐 Security Design Principles
 
-1. **Read-only** — No writes to Active Directory. Ever.
-2. **No service account** — Uses integrated Windows auth via the logged-in user's Kerberos session.
-3. **No network listeners** — The tool only makes outbound LDAP connections.
-4. **Local storage only** — All data stays in a local SQLite file.
+1. **Read-only** - No writes to Active Directory. Ever.
+2. **No service account** - Uses integrated Windows auth via the logged-in user's Kerberos session.
+3. **No network listeners** - The tool only makes outbound LDAP connections.
+4. **Local storage only** - All data stays in a local SQLite file.
 
 ---
 
-## 📊 Report Severity Scoring
+## 📊 Risk Scoring & Maturity
 
-| Severity | Score Weight | Examples |
-|----------|-------------|---------|
-| CRITICAL | ×40 | Unconstrained delegation, privileged Kerberoastable accounts, no lockout policy |
-| HIGH | ×15 | AS-REP Roastable accounts, password never expires on privileged accounts |
-| MEDIUM | ×5  | Constrained delegation, stale privileged accounts, weak password policy |
-| LOW | ×1  | Stale computer accounts, minor policy gaps |
-| INFO | ×0  | New accounts created (informational only) |
+Every finding is sorted into one of four risk pillars, and each pillar is scored
+from 0 to 100 (higher is worse):
 
-Maximum risk score: **100**
+| Pillar | Covers |
+|--------|--------|
+| Privileged Accounts | DCSync, dormant/nested admins, privileged group changes |
+| Trusts | SID filtering, downlevel and inactive trusts |
+| Stale Objects | Stale users/computers, end-of-life operating systems |
+| Anomalies | Kerberos, delegation, passwords, ADCS, anonymous access |
+
+The **overall score is the worst pillar**, so a single domain-compromise issue
+(for example an ESC1 template or DCSync right) makes the whole domain
+high-risk on its own, instead of being averaged away by many minor findings.
+
+A **maturity level from 1 (worst) to 5 (best)** is also shown, derived from the
+most severe outstanding finding, as a single grade for management.
+
+| Overall score | Band |
+|---------------|------|
+| 70 - 100 | CRITICAL |
+| 40 - 69  | HIGH |
+| 20 - 39  | MEDIUM |
+| 0 - 19   | LOW |
+
+Each finding is additionally tagged with its **MITRE ATT&CK** technique.
 
 ---
 
