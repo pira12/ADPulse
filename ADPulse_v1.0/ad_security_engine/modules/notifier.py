@@ -340,9 +340,17 @@ class OutputNotifier:
             sev = f.get("severity", "INFO")
             counts[sev] = counts.get(sev, 0) + 1
 
-        risk_score = min(
-            counts["CRITICAL"] * 40 + counts["HIGH"] * 15 + counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
-        )
+        try:
+            from modules import scoring
+            model = scoring.compute(findings)
+        except Exception:
+            model = {
+                "overall_score": min(
+                    counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
+                    counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100),
+                "maturity_level": None, "pillars": {},
+            }
+        risk_score = model["overall_score"]
 
         export = {
             "tool": "ADPulse",
@@ -357,6 +365,8 @@ class OutputNotifier:
             "summary": {
                 "total_findings": len(findings),
                 "risk_score": risk_score,
+                "maturity_level": model.get("maturity_level"),
+                "pillars": model.get("pillars", {}),
                 "by_severity": counts,
             },
             "findings": [
@@ -369,6 +379,7 @@ class OutputNotifier:
                     "affected_count": len(f.get("affected", [])),
                     "affected": f.get("affected", []),
                     "remediation": f.get("remediation", ""),
+                    "mitre": f.get("mitre", []),
                     "first_seen": f.get("first_seen"),
                     "is_new": bool(f.get("is_new", 1)),
                 }
@@ -393,11 +404,12 @@ class OutputNotifier:
             writer = csv.writer(f)
             writer.writerow([
                 "Finding ID", "Severity", "Category", "Title",
-                "Affected Count", "Affected Objects", "First Seen",
+                "Affected Count", "Affected Objects", "MITRE ATT&CK", "First Seen",
                 "Is New", "Description", "Remediation"
             ])
             for finding in sorted(findings, key=lambda x: SEVERITY_ORDER.get(x.get("severity", "INFO"), 99)):
                 affected = finding.get("affected", [])
+                mitre_ids = ", ".join(m.get("id", "") for m in finding.get("mitre", []))
                 writer.writerow([
                     finding.get("finding_id", ""),
                     finding.get("severity", ""),
@@ -405,6 +417,7 @@ class OutputNotifier:
                     finding.get("title", ""),
                     len(affected),
                     "; ".join(str(a) for a in affected[:50]),
+                    mitre_ids,
                     (finding.get("first_seen") or "")[:19],
                     "NEW" if finding.get("is_new", 1) else "RECURRING",
                     finding.get("description", ""),

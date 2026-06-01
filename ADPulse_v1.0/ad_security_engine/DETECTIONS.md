@@ -1,7 +1,10 @@
 # ADPulse Detection Catalog
 
-Complete reference of all 30+ security detections performed by ADPulse.
-All detections use **read-only LDAP queries** and require only **standard Domain User** privileges.
+Complete reference of all 40+ security detections performed by ADPulse.
+Detections require only **standard Domain User** privileges. They are **read-only LDAP
+queries** by default; the single exception is the optional `GPP-001-CPASSWORD` SYSVOL
+check, which reads SYSVOL over SMB (also read-only) and is disabled unless explicitly
+enabled in config.
 
 ---
 
@@ -50,6 +53,20 @@ All detections use **read-only LDAP queries** and require only **standard Domain
 | ACCT-002-EXPIRING | Account Hygiene | INFO | Accounts Expiring Soon |
 | POL-006-FGPP-NO-TARGETS | Password Policy | MEDIUM | FGPPs With No Targets |
 | POL-007-FGPP-PRIV-GAP | Password Policy | MEDIUM | Privileged Groups Not Covered by FGPP |
+| ESC1-VULNERABLE-TEMPLATE | Certificate Services | CRITICAL | ADCS template: enrollee-supplied subject on auth template |
+| ESC2-ANY-PURPOSE | Certificate Services | HIGH | ADCS template: Any-Purpose / no-EKU enrollable by low-priv |
+| ESC3-ENROLLMENT-AGENT | Certificate Services | HIGH | ADCS template: Enrollment Agent enrollable by low-priv |
+| ESC4-TEMPLATE-ACL | Certificate Services | HIGH | ADCS template: weak permissions (low-priv write/owner) |
+| ANON-001-DSHEURISTICS | Domain Configuration | HIGH | Anonymous LDAP access enabled via dSHeuristics |
+| ANON-002-PRE2000 | Domain Configuration | HIGH | Pre-Windows 2000 Compatible Access allows anonymous |
+| RBCD-001-CONFIGURED | Delegation | MEDIUM | Resource-Based Constrained Delegation configured |
+| TRUST-003-DOWNLEVEL | Domain Configuration | MEDIUM | Downlevel (NT4) trust relationships |
+| TRUST-004-INACTIVE | Domain Configuration | MEDIUM | Inactive trusts (stale partner domain) |
+| GPP-001-CPASSWORD | Password Hygiene | CRITICAL | Recoverable GPP passwords in SYSVOL (optional SMB scan) |
+
+> Every finding is additionally tagged with its **MITRE ATT&CK** technique(s) and rolled up into a
+> **4-pillar risk model** (Privileged Accounts, Trusts, Stale Objects, Anomalies). The overall 0–100
+> score is the *worst* pillar, and a 1–5 maturity level is derived from the most severe finding.
 
 ---
 
@@ -572,3 +589,98 @@ To add a new detection:
 2. If admin rights are genuinely required, use a Group Managed Service Account (gMSA) — these have auto-rotating 120+ character passwords and cannot be Kerberoasted.
 3. As an interim measure, set a long random password (25+ characters) on the account.
 4. Enable `Require Kerberos AES encryption` on the account to prevent RC4-based Kerberoasting while you remediate.
+
+---
+
+### AD Certificate Services Detections (ADCS / PKI)
+
+All ADCS checks read certificate templates from the Configuration partition over
+LDAP (read-only, standard domain-user privileges). Template enrollment/permission
+rights are evaluated by parsing the binary `nTSecurityDescriptor` DACL and matching
+the Certificate-Enrollment / AutoEnrollment extended-right GUIDs against well-known
+low-privilege principals (Authenticated Users, Domain Users/Computers, Everyone).
+
+#### ESC1-VULNERABLE-TEMPLATE — Enrollee-Supplied Subject
+
+**What it detects:** Templates that (1) let the enrollee supply an arbitrary subject/SAN,
+(2) issue a certificate usable for client authentication, (3) require no manager approval
+or authorized signatures, and (4) are enrollable by low-privileged users.
+
+**Why it matters:** An attacker can request a certificate as **any** user — including a
+Domain Admin — and authenticate as them, leading directly to domain takeover.
+
+**Severity:** `CRITICAL`
+
+#### ESC2-ANY-PURPOSE — Any-Purpose / No-EKU Template
+
+**What it detects:** Low-priv-enrollable templates that issue "Any Purpose" (or no EKU)
+certificates with no approval. Such certificates can be used for client authentication.
+
+**Severity:** `HIGH`
+
+#### ESC3-ENROLLMENT-AGENT — Enrollment Agent Template
+
+**What it detects:** Low-priv-enrollable templates carrying the Certificate Request Agent
+EKU, allowing the holder to enroll on behalf of other users.
+
+**Severity:** `HIGH`
+
+#### ESC4-TEMPLATE-ACL — Weak Template Permissions
+
+**What it detects:** Certificate templates where low-privileged principals hold
+write/owner/full-control rights. An attacker can reconfigure the template into an ESC1.
+
+**Severity:** `HIGH`
+
+---
+
+### Domain Hardening & Anonymous Access Detections
+
+#### ANON-001-DSHEURISTICS — Anonymous LDAP Access
+
+**What it detects:** The forest `dSHeuristics` value with its 7th character set to `2`,
+which enables anonymous (unauthenticated) LDAP binds.
+
+**Severity:** `HIGH`
+
+#### ANON-002-PRE2000 — Pre-Windows 2000 Compatible Access
+
+**What it detects:** The "Pre-Windows 2000 Compatible Access" group containing the
+Everyone (S-1-1-0) or Anonymous Logon (S-1-5-7) well-known principals, granting broad
+near-anonymous read access to the directory.
+
+**Severity:** `HIGH`
+
+#### RBCD-001-CONFIGURED — Resource-Based Constrained Delegation
+
+**What it detects:** Accounts with `msDS-AllowedToActOnBehalfOfOtherIdentity` set. RBCD is
+a legitimate feature but a common privilege-escalation primitive, so every configured
+target is surfaced for review.
+
+**Severity:** `MEDIUM`
+
+#### TRUST-003-DOWNLEVEL / TRUST-004-INACTIVE — Trust Depth
+
+**What it detects:** Downlevel (NT4-style) trusts that predate modern trust security, and
+trusts whose trustedDomain object has not changed in over a year (likely pointing at a
+decommissioned partner domain — a forgotten authentication path).
+
+**Severity:** `MEDIUM`
+
+---
+
+### Optional SMB SYSVOL Detection
+
+#### GPP-001-CPASSWORD — Recoverable Group Policy Preferences Passwords
+
+**What it detects:** `cpassword` attributes inside Group Policy Preferences XML files
+(Groups.xml, Services.xml, etc.) in SYSVOL. Microsoft published the static AES key
+(MS14-025), so any authenticated user who can read SYSVOL can recover these passwords.
+
+**How it runs:** This is the one check that reaches beyond LDAP. It is **disabled by
+default** and enabled via `[sysvol] enabled = true`. It requires the optional
+`smbprotocol` package. The scan is strictly read-only, bounded in file count and size,
+and **never writes recovered plaintext into reports** — it reports the affected account
+and that the credential is recoverable.
+
+**Severity:** `CRITICAL`

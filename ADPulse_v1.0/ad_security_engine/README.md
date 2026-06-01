@@ -1,6 +1,8 @@
 # 🛡️ AD Security Continuous Assessment Engine
 
-A **lightweight, automated, read-only** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift — just run it on a domain-joined Windows VM with read access to AD.
+A **lightweight, automated** Active Directory security monitoring tool that continuously detects misconfigurations, attack paths, and drift — just run it on a domain-joined Windows VM with read access to AD.
+
+It runs **read-only by default** (LDAP only, standard domain-user privileges). An optional, opt-in SMB module can additionally inspect SYSVOL for Group Policy Preferences passwords — still read-only, but reaching beyond LDAP.
 
 ---
 
@@ -9,11 +11,14 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 | Feature | Details |
 |---------|---------|
 | **No service account** | Uses integrated Windows auth — just run on a domain-joined VM with AD read access |
+| **Risk model & maturity grade** | PingCastle-style 4-pillar scoring (Privileged Accounts, Trusts, Stale Objects, Anomalies) where the overall score is the *worst* pillar, plus a 1–5 maturity level |
+| **MITRE ATT&CK mapping** | Every finding is tagged with the ATT&CK technique an attacker would use |
+| **ADCS / PKI coverage** | Detects vulnerable certificate templates (ESC1–ESC4) over LDAP |
 | **Fully automated** | Runs as a Windows Scheduled Task or daemon, zero manual effort |
 | **Baseline & delta** | Detects *changes* between scans, not just point-in-time issues |
 | **Finding policy lifecycle** | Mark findings as `accepted_risk`, `in_remediation`, or `resolved` via `--policy` CLI |
-| **Parallel LDAP scan** | All 28 AD queries run concurrently — faster scans on large environments |
-| **Professional reports** | Auto-generates branded PDF and interactive HTML reports with policy badges |
+| **Parallel LDAP scan** | All AD queries run concurrently — faster scans on large environments |
+| **Professional reports** | Auto-generates branded PDF and interactive HTML reports with policy badges, MITRE chips and a category-risk breakdown |
 | **Email alerting** | Sends severity-filtered alerts with the PDF attached |
 | **SQLite storage** | No external database — single file, zero infrastructure |
 | **Cross-platform** | Python — runs on Windows, Linux (for hybrid environments) |
@@ -46,6 +51,21 @@ A **lightweight, automated, read-only** Active Directory security monitoring too
 - **Stale computer accounts** — decommissioned machines still in AD
 - **End-of-life operating systems** — Windows XP, Server 2003/2008, Windows 7, etc.
 - Unconstrained delegation on non-DC machines
+
+### Certificate Services (ADCS / PKI)
+- **ESC1** — enrollee-supplied subject on a client-auth template enrollable by low-priv users (domain takeover)
+- **ESC2** — Any-Purpose / no-EKU template enrollable by low-priv users
+- **ESC3** — Enrollment Agent template enrollable by low-priv users
+- **ESC4** — weak certificate-template permissions (low-priv write/owner → reconfigure into ESC1)
+
+### Domain Hardening & Trusts
+- **Anonymous LDAP access** via `dSHeuristics`
+- **Pre-Windows 2000 Compatible Access** containing Everyone / Anonymous
+- **Resource-Based Constrained Delegation (RBCD)** targets configured
+- **Downlevel (NT4) trusts** and **inactive trusts** (stale partner domains)
+
+### Group Policy Preferences (optional SMB SYSVOL scan)
+- **GPP `cpassword`** credentials recoverable from SYSVOL (MS14-025) — off by default, opt-in via `[sysvol]`
 
 ---
 

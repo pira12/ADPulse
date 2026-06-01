@@ -123,6 +123,154 @@ def _sid_bytes_to_ldap_filter(sid_bytes: bytes) -> str:
     return "".join(f"\\{b:02x}" for b in sid_bytes)
 
 
+# ── Generic DACL parsing (used by ADCS certificate-template analysis) ──────────
+# ACE types we care about.
+_ACE_TYPE_ALLOWED          = 0x00  # ACCESS_ALLOWED_ACE
+_ACE_TYPE_ALLOWED_OBJECT2  = 0x05  # ACCESS_ALLOWED_OBJECT_ACE (already used above)
+
+# Active Directory extended-right GUIDs, in Windows mixed-endian binary form.
+# Certificate-Enrollment:  0e10c968-78fb-11d2-90d4-00c04f79dc55
+# Certificate-AutoEnrollment: a05b8cc2-17bc-4802-a710-e7c15ab866a2
+_ENROLL_GUID     = bytes.fromhex("68c9100efb78d21190d400c04f79dc55")
+_AUTOENROLL_GUID = bytes.fromhex("c28c5ba0bc170248a710e7c15ab866a2")
+
+# Access mask bits
+_ADS_RIGHT_DS_CONTROL_ACCESS = 0x00000100  # "all extended rights" when no object GUID
+_ADS_RIGHT_DS_WRITE_PROP     = 0x00000020
+_ADS_RIGHT_WRITE_DACL        = 0x00040000
+_ADS_RIGHT_WRITE_OWNER       = 0x00080000
+_ADS_RIGHT_GENERIC_WRITE     = 0x40000000
+_ADS_RIGHT_GENERIC_ALL       = 0x10000000
+
+# Well-known "low privilege" SIDs / RIDs that should never hold dangerous rights.
+_LOW_PRIV_FULL_SIDS = {
+    "S-1-1-0",    # Everyone
+    "S-1-5-7",    # Anonymous Logon
+    "S-1-5-11",   # Authenticated Users
+    "S-1-5-32-545",  # BUILTIN\Users
+}
+_LOW_PRIV_RID_SUFFIXES = (
+    "-513",  # Domain Users
+    "-515",  # Domain Computers
+    "-514",  # Domain Guests
+)
+
+
+def is_low_priv_sid(sid_str: str) -> bool:
+    """True if a SID represents a broad, low-privilege principal."""
+    if not sid_str:
+        return False
+    if sid_str in _LOW_PRIV_FULL_SIDS:
+        return True
+    return any(sid_str.endswith(suffix) for suffix in _LOW_PRIV_RID_SUFFIXES)
+
+
+def parse_dacl_aces(sd: bytes) -> list:
+    """
+    Walk a binary SECURITY_DESCRIPTOR_RELATIVE DACL and return a list of ACE dicts:
+      {"sid": str, "mask": int, "object_guid": bytes|None}
+
+    Bounds-checked throughout; returns [] on any malformed structure. Read-only.
+    """
+    if not sd or len(sd) < 20:
+        return []
+    try:
+        offset_dacl = struct.unpack_from("<I", sd, 16)[0]
+        if offset_dacl == 0 or offset_dacl + 8 > len(sd):
+            return []
+        ace_count = struct.unpack_from("<H", sd, offset_dacl + 4)[0]
+        ace_offset = offset_dacl + 8
+
+        aces = []
+        for _ in range(ace_count):
+            if ace_offset + 8 > len(sd):
+                break
+            ace_type, _flags, ace_size = struct.unpack_from("<BBH", sd, ace_offset)
+            if ace_size == 0 or ace_offset + ace_size > len(sd):
+                break
+
+            object_guid = None
+            if ace_type == _ACE_TYPE_ALLOWED:
+                # ACCESS_ALLOWED_ACE: Header(4) Mask(4) SID
+                mask = struct.unpack_from("<I", sd, ace_offset + 4)[0]
+                sid_start = ace_offset + 8
+            elif ace_type == _ACE_TYPE_ALLOWED_OBJECT2:
+                # ACCESS_ALLOWED_OBJECT_ACE: Header(4) Mask(4) Flags(4) [ObjType(16)] [InhType(16)] SID
+                mask = struct.unpack_from("<I", sd, ace_offset + 4)[0]
+                flags = struct.unpack_from("<I", sd, ace_offset + 8)[0]
+                pos = ace_offset + 12
+                if flags & _ACE_OBJECT_TYPE_PRESENT:
+                    object_guid = bytes(sd[pos:pos + 16])
+                    pos += 16
+                if flags & _ACE_INHERITED_OBJECT_PRESENT:
+                    pos += 16
+                sid_start = pos
+            else:
+                ace_offset += ace_size
+                continue
+
+            if sid_start + 8 <= ace_offset + ace_size and sid_start + 1 < len(sd):
+                sub_count = sd[sid_start + 1]
+                sid_size = 8 + sub_count * 4
+                if sid_start + sid_size <= len(sd):
+                    sid_bytes = bytes(sd[sid_start:sid_start + sid_size])
+                    aces.append({
+                        "sid": _sid_bytes_to_str(sid_bytes),
+                        "mask": mask,
+                        "object_guid": object_guid,
+                    })
+
+            ace_offset += ace_size
+        return aces
+    except (struct.error, IndexError):
+        return []
+
+
+def analyze_template_acl(sd: bytes) -> dict:
+    """
+    Analyse a certificate-template security descriptor.
+    Returns {"low_priv_enroll": bool, "low_priv_edit": bool, "enroll_sids": [str]}.
+    """
+    result = {"low_priv_enroll": False, "low_priv_edit": False, "enroll_sids": []}
+    for ace in parse_dacl_aces(sd):
+        sid = ace["sid"]
+        mask = ace["mask"]
+        guid = ace["object_guid"]
+        low = is_low_priv_sid(sid)
+
+        # Enroll: object-specific extended right for the Enroll/AutoEnroll GUID,
+        # OR a generic "all extended rights" (CONTROL_ACCESS, no object GUID).
+        grants_enroll = False
+        if guid in (_ENROLL_GUID, _AUTOENROLL_GUID):
+            grants_enroll = True
+        elif guid is None and (mask & _ADS_RIGHT_DS_CONTROL_ACCESS):
+            grants_enroll = True
+        if grants_enroll:
+            result["enroll_sids"].append(sid)
+            if low:
+                result["low_priv_enroll"] = True
+
+        # ESC4: dangerous write control over the template object held by low-priv SIDs.
+        if low and (mask & (_ADS_RIGHT_WRITE_DACL | _ADS_RIGHT_WRITE_OWNER |
+                            _ADS_RIGHT_GENERIC_WRITE | _ADS_RIGHT_GENERIC_ALL |
+                            _ADS_RIGHT_DS_WRITE_PROP)):
+            result["low_priv_edit"] = True
+    return result
+
+
+# Extended Key Usage OIDs that allow a certificate to be used for AD authentication.
+EKU_CLIENT_AUTH    = "1.3.6.1.5.5.7.3.2"
+EKU_SMARTCARD      = "1.3.6.1.4.1.311.20.2.2"
+EKU_PKINIT         = "1.3.6.1.5.2.3.4"
+EKU_ANY_PURPOSE    = "2.5.29.37.0"
+EKU_ENROLLMENT_AGENT = "1.3.6.1.4.1.311.20.2.1"
+_AUTH_EKUS = {EKU_CLIENT_AUTH, EKU_SMARTCARD, EKU_PKINIT}
+
+# msPKI-Certificate-Name-Flag / msPKI-Enrollment-Flag bits
+CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT = 0x00000001
+CT_FLAG_PEND_ALL_REQUESTS         = 0x00000002  # manager approval required
+
+
 class LDAPCollector:
     """
     Connects to an Active Directory domain controller via LDAP and
@@ -821,3 +969,178 @@ class LDAPCollector:
         except Exception as e:
             logger.warning(f"get_domain_acl failed: {e}")
             return []
+
+    # ------------------------------------------------------------------ #
+    #  AD Certificate Services (ADCS / PKI) Queries                        #
+    # ------------------------------------------------------------------ #
+
+    def _sd_control(self):
+        """
+        Build an LDAP control requesting only OWNER+GROUP+DACL of the security
+        descriptor (sdflags=0x07). This avoids needing SeSecurityPrivilege to read
+        the SACL, so the query succeeds for ordinary domain users. Returns None if
+        the helper is unavailable (older ldap3) — the search still works without it.
+        """
+        try:
+            from ldap3.protocol.microsoft import security_descriptor_control
+            return security_descriptor_control(sdflags=0x07)
+        except Exception:
+            return None
+
+    def _config_dn(self) -> str:
+        return f"CN=Configuration,{self.base_dn}"
+
+    @staticmethod
+    def _as_list(val) -> list:
+        if val is None:
+            return []
+        return list(val) if isinstance(val, (list, tuple)) else [val]
+
+    def get_certificate_templates(self) -> list:
+        """
+        Enumerate AD Certificate Services certificate templates from the
+        Configuration partition and normalise the security-relevant attributes
+        (read-only). Returns a list of dicts suitable for ESC1-ESC4 analysis.
+        """
+        base = (f"CN=Certificate Templates,CN=Public Key Services,"
+                f"CN=Services,{self._config_dn()}")
+        attrs = [
+            "cn", "displayName", "msPKI-Certificate-Name-Flag",
+            "msPKI-Enrollment-Flag", "msPKI-RA-Signature",
+            "pKIExtendedKeyUsage", "msPKI-Certificate-Application-Policy",
+            "nTSecurityDescriptor", "distinguishedName",
+        ]
+        templates = []
+        try:
+            if not self.conn or not self.conn.bound:
+                return []
+            self.conn.search(
+                search_base=base,
+                search_filter="(objectClass=pKICertificateTemplate)",
+                search_scope=SUBTREE,
+                attributes=attrs,
+                controls=self._sd_control(),
+            )
+            for entry in self.conn.entries:
+                # Case-insensitive {attr: [values]} view of the entry's attributes.
+                # ldap3 only returns attributes the object actually has, so missing
+                # attributes simply resolve to None/[] here (no exceptions).
+                attrs_l = {k.lower(): v for k, v in entry.entry_attributes_as_dict.items()}
+
+                def _first(name, default=None):
+                    v = attrs_l.get(name.lower())
+                    return v[0] if v else default
+
+                def _all(name):
+                    return attrs_l.get(name.lower()) or []
+
+                name_flag = self._safe_int(_first("msPKI-Certificate-Name-Flag"))
+                enroll_flag = self._safe_int(_first("msPKI-Enrollment-Flag"))
+                ra_sig = self._safe_int(_first("msPKI-RA-Signature"))
+
+                ekus = set()
+                for a in ("pKIExtendedKeyUsage", "msPKI-Certificate-Application-Policy"):
+                    ekus.update(str(x) for x in _all(a))
+
+                acl_info = {"low_priv_enroll": False, "low_priv_edit": False, "enroll_sids": []}
+                sd_val = _first("nTSecurityDescriptor")
+                if sd_val:
+                    try:
+                        acl_info = analyze_template_acl(bytes(sd_val))
+                    except (TypeError, ValueError):
+                        pass
+
+                templates.append({
+                    "name": str(_first("cn", "") or ""),
+                    "display_name": str(_first("displayName", "") or ""),
+                    "enrollee_supplies_subject": bool(name_flag & CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT),
+                    "requires_manager_approval": bool(enroll_flag & CT_FLAG_PEND_ALL_REQUESTS),
+                    "authorized_signatures_required": ra_sig,
+                    "ekus": sorted(ekus),
+                    "client_auth": bool(ekus & _AUTH_EKUS),
+                    "any_purpose": (EKU_ANY_PURPOSE in ekus) or (len(ekus) == 0),
+                    "no_eku": len(ekus) == 0,
+                    "enrollment_agent": EKU_ENROLLMENT_AGENT in ekus,
+                    "low_priv_enroll": acl_info["low_priv_enroll"],
+                    "low_priv_edit": acl_info["low_priv_edit"],
+                    "dn": entry.entry_dn,
+                })
+            logger.info(f"Retrieved {len(templates)} certificate templates.")
+        except LDAPException as e:
+            logger.debug(f"get_certificate_templates: ADCS not present or unreadable ({e}).")
+        except Exception as e:
+            logger.warning(f"get_certificate_templates failed: {e}")
+        return templates
+
+    def get_certificate_authorities(self) -> list:
+        """Enumerate enrollment services (CAs) for inventory. Read-only."""
+        base = (f"CN=Enrollment Services,CN=Public Key Services,"
+                f"CN=Services,{self._config_dn()}")
+        attrs = ["cn", "dNSHostName", "certificateTemplates", "distinguishedName"]
+        try:
+            results = self._search("(objectClass=pKIEnrollmentService)", attrs, search_base=base)
+            if results:
+                logger.info(f"Found {len(results)} certificate authorities.")
+            return results
+        except Exception as e:
+            logger.debug(f"get_certificate_authorities failed: {e}")
+            return []
+
+    # ------------------------------------------------------------------ #
+    #  Hardening / Anonymous-Access Queries                                #
+    # ------------------------------------------------------------------ #
+
+    def get_dsheuristics(self) -> Optional[str]:
+        """
+        Read the forest dSHeuristics string. The 7th character ('fAllowAnonNSPI')
+        being '2' enables anonymous LDAP access to the directory.
+        """
+        config_dn = f"CN=Directory Service,CN=Windows NT,CN=Services,{self._config_dn()}"
+        results = self._search("(objectClass=nTDSService)", ["dSHeuristics"], search_base=config_dn)
+        if results and results[0].get("dSHeuristics"):
+            return str(results[0]["dSHeuristics"])
+        return None
+
+    def get_pre2000_anonymous(self) -> list:
+        """
+        Return the well-known low-trust principals (Everyone / Anonymous) found in
+        the 'Pre-Windows 2000 Compatible Access' group. Their presence allows broad
+        anonymous enumeration of the directory.
+        """
+        flt = "(&(objectClass=group)(cn=Pre-Windows 2000 Compatible Access))"
+        groups = self._search(flt, ["member", "distinguishedName"])
+        risky = []
+        if groups:
+            members = groups[0].get("member") or []
+            if isinstance(members, str):
+                members = [members]
+            for m in members:
+                ml = str(m).upper()
+                if "S-1-1-0" in ml:
+                    risky.append("Everyone (S-1-1-0)")
+                elif "S-1-5-7" in ml:
+                    risky.append("Anonymous Logon (S-1-5-7)")
+        return risky
+
+    def get_rbcd_accounts(self) -> list:
+        """
+        Accounts configured as targets of Resource-Based Constrained Delegation
+        (msDS-AllowedToActOnBehalfOfOtherIdentity set). These must be audited —
+        a writeable RBCD attribute is a common privilege-escalation primitive.
+        """
+        attrs = ["sAMAccountName", "distinguishedName", "userAccountControl"]
+        flt = ("(&(|(objectClass=user)(objectClass=computer))"
+               "(msDS-AllowedToActOnBehalfOfOtherIdentity=*))")
+        results = self._search(flt, attrs)
+        if results:
+            logger.info(f"Found {len(results)} accounts with resource-based delegation configured.")
+        return results
+
+    @staticmethod
+    def _safe_int(attr) -> int:
+        """Coerce an ldap3 attribute (or raw value) to int, defaulting to 0."""
+        try:
+            val = attr.value if hasattr(attr, "value") else attr
+            return int(val) if val is not None else 0
+        except (TypeError, ValueError):
+            return 0

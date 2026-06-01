@@ -169,3 +169,21 @@ log_backup_count = 5
 # [policy]
 # Path to the finding policy file (default: ./policy.json, relative to config.ini)
 # policy_path = ./policy.json
+
+# ── SYSVOL Scan (optional, SMB) ───────────────────────────────────────
+# ADPulse can read the domain SYSVOL share over SMB to detect Group Policy
+# Preferences passwords (the "cpassword" / MS14-025 weakness). This is the only
+# check that reaches beyond LDAP, so it is OFF by default and opt-in here.
+#
+# Requirements:
+#   * pip install smbprotocol         (pure-Python SMB client)
+#   * pip install cryptography        (optional — only used to verify cpassword
+#                                       values; presence is reported either way)
+#   * Read access to \\<server>\SYSVOL (any domain user has this by default)
+#
+# Security: the scan is strictly read-only, bounded in files/size, and never
+# writes recovered plaintext passwords into reports — it reports the affected
+# account and that the credential is recoverable.
+#
+# [sysvol]
+# enabled = false

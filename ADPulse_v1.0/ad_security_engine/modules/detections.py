@@ -175,6 +175,21 @@ class DetectionEngine:
             ad_data.get("privileged_members", {}),
         )
 
+        # ADCS / PKI and hardening detections (un-sandboxed expansion)
+        findings += self.detect_adcs_misconfigurations(
+            ad_data.get("cert_templates", []),
+            ad_data.get("cert_authorities", []),
+        )
+        findings += self.detect_anonymous_access(
+            ad_data.get("dsheuristics"),
+            ad_data.get("pre2000_anonymous", []),
+        )
+        findings += self.detect_resource_based_delegation(ad_data.get("rbcd_accounts", []))
+
+        # SYSVOL / GPP findings are produced by the SMB scanner and passed in
+        # pre-formatted as finding dicts (see modules/sysvol_scanner.py).
+        findings += ad_data.get("sysvol_findings", [])
+
         # Delta-based detections (require a baseline)
         if baseline and previous_run_id:
             findings += self.detect_privileged_group_changes(
@@ -194,6 +209,13 @@ class DetectionEngine:
 
         # Sort by severity
         unique_findings.sort(key=lambda x: SEVERITY_ORDER.get(x["severity"], 99))
+
+        # Tag each finding with the MITRE ATT&CK technique(s) an attacker would use.
+        try:
+            from modules.mitre import attach as _attach_mitre
+            _attach_mitre(unique_findings)
+        except Exception as e:  # never let enrichment break a scan
+            logger.debug(f"MITRE enrichment skipped: {e}")
 
         logger.info(f"Detection complete. Total findings: {len(unique_findings)}")
         return unique_findings
@@ -1037,6 +1059,8 @@ class DetectionEngine:
 
         findings = []
         trust_names = []
+        downlevel = []
+        inactive = []
 
         for t in trusts:
             partner = t.get("trustPartner") or t.get("cn") or "Unknown"
@@ -1062,6 +1086,56 @@ class DetectionEngine:
             if not sid_filtering:
                 label += " [SID Filtering OFF]"
             trust_names.append(label)
+
+            # Downlevel (NT4) trust — legacy and inherently weaker
+            if trust_type == 1:
+                downlevel.append(f"{partner} ({dir_label})")
+
+            # Inactive trust — the trusted-domain object has not changed in a long
+            # time, suggesting the partner domain may be gone (a stale attack surface).
+            changed_days = _days_since(_to_datetime(t.get("whenChanged")))
+            if changed_days is not None and changed_days > 365:
+                inactive.append(f"{partner} (last changed {changed_days}d ago)")
+
+        if downlevel:
+            findings.append({
+                "finding_id": "TRUST-003-DOWNLEVEL",
+                "category": "Domain Configuration",
+                "severity": "MEDIUM",
+                "title": f"Downlevel (NT4) Trust Relationships ({len(downlevel)})",
+                "description": (
+                    f"{len(downlevel)} trust(s) are downlevel (Windows NT4-style) trusts. "
+                    "These predate modern AD trust security features, cannot use SID filtering "
+                    "in the same way, and should be migrated or removed."
+                ),
+                "affected": downlevel,
+                "details": {"count": len(downlevel)},
+                "remediation": (
+                    "1. Confirm the trusted NT4 domain still exists and is required.\n"
+                    "2. Migrate to a modern uplevel (AD) forest/external trust, or remove it.\n"
+                    "3. Apply Selective Authentication where the trust must remain."
+                ),
+            })
+
+        if inactive:
+            findings.append({
+                "finding_id": "TRUST-004-INACTIVE",
+                "category": "Domain Configuration",
+                "severity": "MEDIUM",
+                "title": f"Inactive Trust Relationships ({len(inactive)})",
+                "description": (
+                    f"{len(inactive)} trust(s) have not been modified in over a year. A trust to a "
+                    "decommissioned or unmaintained domain is a forgotten authentication path that "
+                    "still expands the attack surface."
+                ),
+                "affected": inactive,
+                "details": {"count": len(inactive)},
+                "remediation": (
+                    "1. Verify whether the partner domain is still active and required.\n"
+                    "2. Remove trusts to domains that no longer exist or are no longer needed.\n"
+                    "3. Document the business purpose of every remaining trust."
+                ),
+            })
 
         # Flag trusts without SID filtering as higher severity
         no_sid_filter = [t for t in trust_names if "SID Filtering OFF" in t]
@@ -1686,5 +1760,210 @@ class DetectionEngine:
                 "3. As an interim measure, set a long random password (25+ chars) on the account.\n"
                 "4. Enable 'Require Kerberos AES encryption' on the account to prevent "
                 "   RC4-based Kerberoasting while you remediate."
+            ),
+        }]
+
+    # ------------------------------------------------------------------ #
+    #  AD Certificate Services (ADCS / PKI) Detections                     #
+    # ------------------------------------------------------------------ #
+
+    def detect_adcs_misconfigurations(self, cert_templates: list, cert_authorities: list) -> list:
+        """
+        Detect exploitable AD Certificate Services certificate templates
+        (the "ESC" family).
+
+        ESC1 — low-priv users can enroll in a client-auth template AND supply an
+               arbitrary subject (SAN), letting them request a certificate that
+               authenticates as any user (including Domain Admins).
+        ESC2 — low-priv users can enroll in an "Any Purpose" (or no-EKU) template.
+        ESC3 — low-priv users can enroll in a Certificate Request Agent template,
+               enabling them to enroll on behalf of other users.
+        ESC4 — low-priv users hold dangerous write rights over a template object
+               and can reconfigure it into an ESC1.
+        """
+        findings = []
+        if not cert_templates:
+            # No ADCS templates found (ADCS likely not deployed) — nothing to report.
+            return findings
+
+        esc1, esc2, esc3, esc4 = [], [], [], []
+        for t in cert_templates:
+            label = t.get("display_name") or t.get("name") or "Unknown"
+            no_approval = (not t.get("requires_manager_approval")
+                           and int(t.get("authorized_signatures_required") or 0) == 0)
+
+            if t.get("low_priv_edit"):
+                esc4.append(label)
+            if not t.get("low_priv_enroll"):
+                continue  # remaining ESCs require low-priv enrollment
+            if t.get("enrollee_supplies_subject") and t.get("client_auth") and no_approval:
+                esc1.append(label)
+            if (t.get("any_purpose") or t.get("no_eku")) and no_approval:
+                esc2.append(label)
+            if t.get("enrollment_agent") and no_approval:
+                esc3.append(label)
+
+        if esc1:
+            findings.append({
+                "finding_id": "ESC1-VULNERABLE-TEMPLATE",
+                "category": "Certificate Services",
+                "severity": "CRITICAL",
+                "title": f"ADCS ESC1: Enrollee-Supplied Subject on Auth Template ({len(esc1)})",
+                "description": (
+                    f"{len(esc1)} certificate template(s) allow low-privileged users to enroll, "
+                    "supply an arbitrary subject/SAN, and obtain a certificate usable for "
+                    "authentication. An attacker can request a certificate as any user — "
+                    "including a Domain Admin — and use it to take over the domain (ESC1)."
+                ),
+                "affected": esc1,
+                "details": {"count": len(esc1), "esc": "ESC1"},
+                "remediation": (
+                    "1. Remove the 'Supply in the request' subject option, OR\n"
+                    "2. Require manager approval (CT_FLAG_PEND_ALL_REQUESTS), OR\n"
+                    "3. Restrict enrollment permissions to specific, trusted principals.\n"
+                    "4. Audit issued certificates for abuse."
+                ),
+            })
+        if esc2:
+            findings.append({
+                "finding_id": "ESC2-ANY-PURPOSE",
+                "category": "Certificate Services",
+                "severity": "HIGH",
+                "title": f"ADCS ESC2: Any-Purpose / No-EKU Template Enrollable ({len(esc2)})",
+                "description": (
+                    f"{len(esc2)} certificate template(s) grant low-privileged enrollment and "
+                    "issue 'Any Purpose' (or no EKU) certificates. Such certificates can be used "
+                    "for client authentication and other purposes, enabling impersonation (ESC2)."
+                ),
+                "affected": esc2,
+                "details": {"count": len(esc2), "esc": "ESC2"},
+                "remediation": (
+                    "1. Restrict the EKU to only what the template legitimately needs.\n"
+                    "2. Require manager approval or restrict enrollment to trusted principals."
+                ),
+            })
+        if esc3:
+            findings.append({
+                "finding_id": "ESC3-ENROLLMENT-AGENT",
+                "category": "Certificate Services",
+                "severity": "HIGH",
+                "title": f"ADCS ESC3: Enrollment Agent Template Enrollable ({len(esc3)})",
+                "description": (
+                    f"{len(esc3)} certificate template(s) issue Certificate Request Agent "
+                    "certificates to low-privileged users. An enrollment-agent certificate lets "
+                    "the holder request certificates on behalf of other users (ESC3)."
+                ),
+                "affected": esc3,
+                "details": {"count": len(esc3), "esc": "ESC3"},
+                "remediation": (
+                    "1. Restrict enrollment-agent templates to a small, trusted group.\n"
+                    "2. Use enrollment-agent restrictions on the CA.\n"
+                    "3. Require manager approval."
+                ),
+            })
+        if esc4:
+            findings.append({
+                "finding_id": "ESC4-TEMPLATE-ACL",
+                "category": "Certificate Services",
+                "severity": "HIGH",
+                "title": f"ADCS ESC4: Weak Certificate Template Permissions ({len(esc4)})",
+                "description": (
+                    f"{len(esc4)} certificate template(s) grant write/owner/full-control "
+                    "permissions to low-privileged principals. An attacker can reconfigure the "
+                    "template into an ESC1 and then escalate to domain takeover (ESC4)."
+                ),
+                "affected": esc4,
+                "details": {"count": len(esc4), "esc": "ESC4"},
+                "remediation": (
+                    "1. Remove write/owner rights for non-administrative principals on all "
+                    "certificate templates.\n"
+                    "2. Restrict template management to PKI administrators."
+                ),
+            })
+
+        return findings
+
+    # ------------------------------------------------------------------ #
+    #  Anonymous Access / Hardening Detections                             #
+    # ------------------------------------------------------------------ #
+
+    def detect_anonymous_access(self, dsheuristics, pre2000_anonymous: list) -> list:
+        """
+        ANON-001: forest dSHeuristics enables anonymous LDAP access.
+        ANON-002: 'Pre-Windows 2000 Compatible Access' contains Everyone/Anonymous.
+        Both allow unauthenticated enumeration of directory contents.
+        """
+        findings = []
+
+        if dsheuristics and len(str(dsheuristics)) >= 7 and str(dsheuristics)[6] == "2":
+            findings.append({
+                "finding_id": "ANON-001-DSHEURISTICS",
+                "category": "Domain Configuration",
+                "severity": "HIGH",
+                "title": "Anonymous LDAP Access Enabled (dSHeuristics)",
+                "description": (
+                    "The forest dSHeuristics setting has the 7th character set to '2', which "
+                    "enables anonymous (unauthenticated) LDAP access to Active Directory. "
+                    "Anyone with network access to a DC can enumerate directory objects without "
+                    "credentials."
+                ),
+                "affected": [f"dSHeuristics = {dsheuristics}"],
+                "details": {"dsheuristics": str(dsheuristics)},
+                "remediation": (
+                    "1. Reset the 7th character of dSHeuristics to '0' (default).\n"
+                    "2. Edit CN=Directory Service,CN=Windows NT,CN=Services,CN=Configuration.\n"
+                    "3. Confirm no legacy application depends on anonymous LDAP binds."
+                ),
+            })
+
+        if pre2000_anonymous:
+            findings.append({
+                "finding_id": "ANON-002-PRE2000",
+                "category": "Domain Configuration",
+                "severity": "HIGH",
+                "title": "Pre-Windows 2000 Compatible Access Allows Anonymous Enumeration",
+                "description": (
+                    "The 'Pre-Windows 2000 Compatible Access' group contains a broad, low-trust "
+                    f"principal ({', '.join(pre2000_anonymous)}). This grants near-anonymous read "
+                    "access to many directory objects and undermines least-privilege."
+                ),
+                "affected": pre2000_anonymous,
+                "details": {"principals": pre2000_anonymous},
+                "remediation": (
+                    "1. Remove Everyone / Anonymous Logon from 'Pre-Windows 2000 Compatible Access'.\n"
+                    "2. Ensure no legacy NT4-era systems still require this membership.\n"
+                    "3. Re-run after change to confirm remediation."
+                ),
+            })
+
+        return findings
+
+    def detect_resource_based_delegation(self, rbcd_accounts: list) -> list:
+        """
+        RBCD-001: accounts configured as Resource-Based Constrained Delegation
+        targets. RBCD is a legitimate feature but a frequent privilege-escalation
+        primitive — every configured target should be reviewed.
+        """
+        if not rbcd_accounts:
+            return []
+        names = [_account_name(a) for a in rbcd_accounts]
+        return [{
+            "finding_id": "RBCD-001-CONFIGURED",
+            "category": "Delegation",
+            "severity": "MEDIUM",
+            "title": f"Resource-Based Constrained Delegation Configured ({len(names)})",
+            "description": (
+                f"{len(names)} account(s) have msDS-AllowedToActOnBehalfOfOtherIdentity set, "
+                "meaning other principals are allowed to impersonate users to them. If an "
+                "attacker can write this attribute on a target, they can perform an RBCD attack "
+                "to escalate privileges. Each configured delegation should be verified."
+            ),
+            "affected": names,
+            "details": {"count": len(names)},
+            "remediation": (
+                "1. Review each RBCD configuration and confirm it is intentional.\n"
+                "2. Remove delegation from accounts that do not require it.\n"
+                "3. Tightly control write access to the msDS-AllowedToActOnBehalfOfOtherIdentity "
+                "attribute on sensitive objects."
             ),
         }]

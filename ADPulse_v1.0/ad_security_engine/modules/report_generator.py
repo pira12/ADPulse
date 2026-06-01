@@ -14,10 +14,22 @@ ADPulse Brand Colors:
 
 import logging
 from datetime import datetime
+from html import escape as _html_escape
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _esc(value) -> str:
+    """
+    HTML-escape a value for safe embedding in the report. AD-derived strings
+    (account names, descriptions, OS names, certificate-template names, policy
+    reasons) are attacker-influenceable, so they must never be rendered as raw
+    HTML — otherwise a crafted directory object could inject script into a report
+    viewed by an administrator (stored XSS).
+    """
+    return _html_escape(str(value if value is not None else ""), quote=True)
 
 # ── ADPulse Brand ────────────────────────────────────────────────────────────
 CS_BLUE        = "#0053A4"
@@ -90,14 +102,25 @@ class HTMLReportGenerator:
             sev = f.get("severity", "INFO")
             counts[sev] = counts.get(sev, 0) + 1
 
-        risk_score = min(
-            counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
-            counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
-        )
-        if   risk_score >= 70: risk_label, risk_col = "CRITICAL", SEVERITY_HEX["CRITICAL"]
-        elif risk_score >= 40: risk_label, risk_col = "HIGH",     SEVERITY_HEX["HIGH"]
-        elif risk_score >= 20: risk_label, risk_col = "MEDIUM",   SEVERITY_HEX["MEDIUM"]
-        else:                  risk_label, risk_col = "LOW",      SEVERITY_HEX["LOW"]
+        from modules import scoring
+        model = scoring.compute(findings)
+        risk_score = model["overall_score"]
+        risk_label = model["risk_label"]
+        risk_col = SEVERITY_HEX.get(risk_label, SEVERITY_HEX["LOW"])
+        maturity_level = model["maturity_level"]
+        maturity_label = model["maturity_label"]
+
+        # Per-pillar score bars (PingCastle-style: overall = worst pillar)
+        pillar_html = ""
+        for pname in scoring.PILLARS:
+            p = model["pillars"][pname]
+            pcol = SEVERITY_HEX.get(scoring.risk_label(p["score"]), SEVERITY_HEX["LOW"])
+            pillar_html += f"""
+            <div class="pillar">
+              <div class="pillar-head"><span>{pname}</span><span style="color:{pcol};font-weight:800;">{p['score']}/100</span></div>
+              <div class="pillar-bar-bg"><div class="pillar-bar-fill" style="width:{p['score']}%;background:{pcol};"></div></div>
+              <div class="pillar-sub">{p['findings']} finding(s)</div>
+            </div>"""
 
         # Stat cards — clickable to filter by severity
         stat_cards = ""
@@ -128,16 +151,32 @@ class HTMLReportGenerator:
 
             affected  = f.get("affected", [])
             tags_html = "".join(
-                f'<span class="atag" title="{a}">{a}</span>'
+                f'<span class="atag" title="{_esc(a)}">{_esc(a)}</span>'
                 for a in affected[:25]
             )
             if len(affected) > 25:
                 tags_html += f'<span class="atag atag-more" onclick="this.parentElement.parentElement.querySelector(\'.tags-overflow\').style.display=\'flex\';this.style.display=\'none\';">+{len(affected)-25} more (click to show)</span>'
                 tags_html += '<div class="tags tags-overflow" style="display:none;">'
-                tags_html += "".join(f'<span class="atag" title="{a}">{a}</span>' for a in affected[25:])
+                tags_html += "".join(f'<span class="atag" title="{_esc(a)}">{_esc(a)}</span>' for a in affected[25:])
                 tags_html += '</div>'
 
-            rem        = f.get("remediation", "").replace("\n", "<br>")
+            rem        = _esc(f.get("remediation", "")).replace("\n", "<br>")
+            esc_title  = _esc(f.get("title", ""))
+            esc_desc   = _esc(f.get("description", ""))
+            esc_reason = _esc(f.get("policy_reason", ""))
+            mitre      = f.get("mitre", []) or []
+            mitre_html = ""
+            if mitre:
+                chips = "".join(
+                    f'<a class="mitre-chip" href="https://attack.mitre.org/techniques/'
+                    f'{m["id"].replace(".", "/")}/" target="_blank" rel="noopener" '
+                    f'title="{m["tactic"]}: {m["name"]}">{m["id"]} {m["name"]}</a>'
+                    for m in mitre
+                )
+                mitre_html = (
+                    "<div class='mitre-block'><span class='mitre-label'>MITRE ATT&amp;CK</span>"
+                    f"<div class='mitre-chips'>{chips}</div></div>"
+                )
             new_badge  = '<span class="new-badge">NEW</span>' if is_new else '<span class="rec-badge">RECURRING</span>'
             policy_badge = ""
             policy_status = f.get("policy_status", "")
@@ -162,16 +201,17 @@ class HTMLReportGenerator:
                 <div style="display:flex;align-items:center;gap:8px;">
                   {new_badge}
                   {policy_badge}
-                  <span class="finding-title-preview">{f.get('title','')}</span>
+                  <span class="finding-title-preview">{esc_title}</span>
                   <span class="chevron">&#9660;</span>
                 </div>
               </div>
               <div class="finding-body" style="border-left:4px solid {col};background:{light};">
-                <h3 class="finding-title">{f.get('title','')}</h3>
-                {f'<p class="policy-note"><em>&#128295; In remediation: {f.get("policy_reason","")}'
-                 f'{(" &mdash; expires " + f["policy_expires"]) if f.get("policy_expires") else ""}'
+                <h3 class="finding-title">{esc_title}</h3>
+                {f'<p class="policy-note"><em>&#128295; In remediation: {esc_reason}'
+                 f'{(" &mdash; expires " + _esc(f["policy_expires"])) if f.get("policy_expires") else ""}'
                  f'</em></p>' if f.get("policy_status") == "in_remediation" else ''}
-                <p class="finding-desc">{f.get('description','')}</p>
+                <p class="finding-desc">{esc_desc}</p>
+                {mitre_html}
                 {"<div class='affected-block'><strong>Affected objects (" + str(len(affected)) + "):</strong><div class='tags'>" + tags_html + "</div></div>" if affected else ""}
                 <div class="rem-block" onclick="event.stopPropagation();">
                   <div class="rem-label">Remediation</div>
@@ -315,6 +355,20 @@ body {{
 .risk-bar-label {{ font-size: 11px; color: #8a99b0; margin-bottom: 6px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }}
 .risk-bar-bg    {{ background: #e8eef5; border-radius: 4px; height: 10px; overflow: hidden; }}
 .risk-bar-fill  {{ height: 100%; border-radius: 4px; background: {risk_col}; width: {risk_score}%; transition: width 0.4s; }}
+.maturity-note  {{ font-size: 12px; color: #5a6b82; margin-top: 8px; }}
+.pillars-box {{ background: white; border-radius: 10px; padding: 16px 22px; margin-bottom: 24px; box-shadow: 0 2px 8px rgba(0,83,164,0.07); }}
+.pillars-title {{ font-size: 11px; color: #8a99b0; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 14px; }}
+.pillars-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px; }}
+.pillar-head {{ display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; color: {CS_DARK}; margin-bottom: 6px; }}
+.pillar-bar-bg {{ background: #e8eef5; border-radius: 4px; height: 8px; overflow: hidden; }}
+.pillar-bar-fill {{ height: 100%; border-radius: 4px; transition: width 0.4s; }}
+.pillar-sub {{ font-size: 11px; color: #8a99b0; margin-top: 5px; }}
+.mitre-block {{ margin: 10px 0; }}
+.mitre-label {{ font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #8a99b0; }}
+.mitre-chips {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }}
+.mitre-chip {{ display: inline-block; background: #eef3fb; color: {CS_BLUE}; border: 1px solid #d4e2f5;
+  border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 600; text-decoration: none; }}
+.mitre-chip:hover {{ background: {CS_BLUE}; color: white; }}
 .risk-label     {{ font-size: 15px; font-weight: 700; color: {risk_col}; }}
 .meta-box {{
   background: white; border-radius: 10px; padding: 16px 22px;
@@ -710,10 +764,16 @@ if (window.location.hash) {
   <div class="risk-box">
     <div class="risk-score-num">{risk_score}</div>
     <div class="risk-bar-wrap">
-      <div class="risk-bar-label">Overall Risk Score / 100</div>
+      <div class="risk-bar-label">Overall Risk Score / 100 &middot; Maturity {maturity_level}/5</div>
       <div class="risk-bar-bg"><div class="risk-bar-fill"></div></div>
+      <div class="maturity-note">{maturity_label}</div>
     </div>
     <div class="risk-label">{risk_label}</div>
+  </div>
+
+  <div class="pillars-box">
+    <div class="pillars-title">Risk by Category &mdash; overall score is the worst pillar</div>
+    <div class="pillars-grid">{pillar_html}</div>
   </div>
 
   {"<div class='meta-box'>" + domain_html + "</div>" if domain_html else ""}
@@ -798,14 +858,15 @@ class PDFReportGenerator:
         REM  = S("RM",  fontSize=8,   textColor=colors.HexColor("#2e3d50"), leading=12)
         FOOT = S("FT",  fontSize=7,   textColor=colors.HexColor("#8a99b0"), alignment=TA_CENTER)
 
-        # Counts & risk
+        # Counts & risk (centralised scoring model: overall = worst pillar)
+        from modules import scoring
         counts = {s: 0 for s in SEVERITY_ORDER}
         for f in findings:
             counts[f.get("severity","INFO")] = counts.get(f.get("severity","INFO"), 0) + 1
-        risk_score = min(
-            counts["CRITICAL"]*40 + counts["HIGH"]*15 + counts["MEDIUM"]*5 + counts["LOW"]*1, 100
-        )
-        risk_label = ("CRITICAL" if risk_score>=70 else "HIGH" if risk_score>=40 else "MEDIUM" if risk_score>=20 else "LOW")
+        model = scoring.compute(findings)
+        risk_score = model["overall_score"]
+        risk_label = model["risk_label"]
+        maturity_level = model["maturity_level"]
         risk_col   = colors.HexColor(SEVERITY_HEX.get(risk_label, "#666"))
 
         def _page(canvas, doc):
@@ -875,16 +936,18 @@ class PDFReportGenerator:
 
         # Risk table
         rt = Table([
-            ["Overall Risk Score", "Risk Level", "Total Findings"],
+            ["Overall Risk Score", "Risk Level", "Maturity", "Total Findings"],
             [
                 Paragraph(f"<b>{risk_score}/100</b>",
-                    S("RS", fontSize=26, textColor=risk_col, fontName="Helvetica-Bold")),
+                    S("RS", fontSize=24, textColor=risk_col, fontName="Helvetica-Bold")),
                 Paragraph(f"<b>{risk_label}</b>",
-                    S("RL", fontSize=17, textColor=risk_col, fontName="Helvetica-Bold")),
+                    S("RL", fontSize=15, textColor=risk_col, fontName="Helvetica-Bold")),
+                Paragraph(f"<b>{maturity_level}/5</b>",
+                    S("RM2", fontSize=24, textColor=cs_mid, fontName="Helvetica-Bold")),
                 Paragraph(f"<b>{len(findings)}</b>",
-                    S("RF", fontSize=26, textColor=cs_blue, fontName="Helvetica-Bold")),
+                    S("RF", fontSize=24, textColor=cs_blue, fontName="Helvetica-Bold")),
             ]
-        ], colWidths=[5.7*cm, 5.7*cm, 5.6*cm])
+        ], colWidths=[4.5*cm, 4.0*cm, 3.5*cm, 4.5*cm])
         rt.setStyle(TableStyle([
             ("BACKGROUND",    (0,0), (-1,0), cs_dark),
             ("TEXTCOLOR",     (0,0), (-1,0), colors.white),

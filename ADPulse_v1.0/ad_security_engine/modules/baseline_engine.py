@@ -435,10 +435,14 @@ class BaselineEngine:
             for f in findings:
                 sev = f.get("severity", "INFO")
                 counts[sev] = counts.get(sev, 0) + 1
-            risk_score = min(
-                counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
-                counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
-            )
+            try:
+                from modules.scoring import overall_score
+                risk_score = overall_score(findings)
+            except Exception:
+                risk_score = min(
+                    counts["CRITICAL"] * 40 + counts["HIGH"] * 15 +
+                    counts["MEDIUM"] * 5 + counts["LOW"] * 1, 100
+                )
             trend.append({
                 "run_id": rid,
                 "finished_at": run["finished_at"],

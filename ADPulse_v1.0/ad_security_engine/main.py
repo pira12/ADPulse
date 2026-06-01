@@ -179,6 +179,8 @@ _AD_DATA_DEFAULTS = {
     "computers_without_laps": [], "krbtgt": None, "trusts": [],
     "tombstone_lifetime": None, "dns_zones": [], "des_only_accounts": [],
     "expiring_accounts": [], "all_groups": [], "domain_acl": [],
+    "cert_templates": [], "cert_authorities": [], "dsheuristics": None,
+    "pre2000_anonymous": [], "rbcd_accounts": [], "sysvol_findings": [],
 }
 
 
@@ -227,6 +229,11 @@ def _collect_ad_data(collector, scanning_cfg: dict) -> dict:
         "expiring_accounts":        lambda: collector.get_expiring_accounts(days_ahead=expiring_days),
         "all_groups":               lambda: collector.get_all_groups(),
         "domain_acl":               lambda: collector.get_domain_acl(),
+        "cert_templates":           lambda: collector.get_certificate_templates(),
+        "cert_authorities":         lambda: collector.get_certificate_authorities(),
+        "dsheuristics":             lambda: collector.get_dsheuristics(),
+        "pre2000_anonymous":        lambda: collector.get_pre2000_anonymous(),
+        "rbcd_accounts":            lambda: collector.get_rbcd_accounts(),
     }
 
     results = dict(_AD_DATA_DEFAULTS)  # start with safe defaults
@@ -313,6 +320,16 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             ad_data = _collect_ad_data(collector, scanning_cfg)
             ad_data["_domain_label"] = domain_label
 
+            # Optional SMB-based SYSVOL scan (GPP cpassword). Off by default; this is
+            # the one capability that reaches beyond LDAP, so it is opt-in via config.
+            if cfg.has_section("sysvol") and cfg["sysvol"].get("enabled", "false").lower() == "true":
+                logger.info(f"  → SYSVOL scan enabled for {domain_label}...")
+                try:
+                    from modules.sysvol_scanner import SysvolScanner
+                    ad_data["sysvol_findings"] = SysvolScanner(ldap_cfg).scan()
+                except Exception as e:
+                    logger.warning(f"SYSVOL scan error for {domain_label}: {e}")
+
             logger.info(
                 f"  → Users: {len(ad_data.get('users', []))} | "
                 f"Computers: {len(ad_data.get('computers', []))} | "
@@ -387,6 +404,11 @@ def run_scan(cfg: configparser.ConfigParser) -> dict:
             logger.info(f"  -> Policy: {len(reappeared)} resolved finding(s) have reappeared.")
 
         findings, suppressed_findings = pm.apply_to_findings(findings)
+
+        # Re-attach MITRE ATT&CK tags (derived from finding_id; not persisted in the DB).
+        from modules.mitre import attach as _attach_mitre
+        _attach_mitre(findings)
+        _attach_mitre(suppressed_findings)
 
         if suppressed_findings:
             logger.info(
